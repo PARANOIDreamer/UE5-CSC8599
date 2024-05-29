@@ -137,6 +137,10 @@ void StoreAccumulatorOutput(in uint2 OutputPixelPosition, in FAccumulatorOutput 
 		ScatterOcclusionOutput[OutputPixelPosition] = OutScatterOcclusion;
 
 	#endif
+
+	//My-Add-23/05/24
+	//ConvolutionOutput_SceneColor[OutputPixelPosition] = float4(1.0, 0.0, 0.0, 1.0);
+	//End
 }
 
 
