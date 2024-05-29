@@ -1192,4 +1192,8 @@ void RecombineMainCS(
 		DebugOutput[OutputPixelPosition] = Debug;
 	}
 	#endif
+
+	//My-Add-23/05/24
+	//SceneColorOutput[OutputPixelPosition] = float4(1.0, 0.0, 0.0, 0);
+	//End
 }
