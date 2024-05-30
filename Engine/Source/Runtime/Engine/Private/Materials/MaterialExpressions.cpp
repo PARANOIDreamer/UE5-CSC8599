@@ -6862,7 +6862,12 @@ int32 UMaterialExpressionMakeMaterialAttributes::Compile(class FMaterialCompiler
 	int32 Ret = INDEX_NONE;
 	UMaterialExpression* Expression = nullptr;
 
+	//My-Change-29/05/24
+	/*primitive
 	static_assert(MP_MAX == 35, 
+	*/
+	static_assert(MP_MAX == 37,
+	//End
 		"New material properties should be added to the end of the inputs for this expression. \
 		The order of properties here should match the material results pins, the make material attriubtes node inputs and the mapping of IO indices to properties in GetMaterialPropertyFromInputOutputIndex().\
 		Insertions into the middle of the properties or a change in the order of properties will also require that existing data is fixed up in DoMaterialAttributeReorder().\
@@ -6890,6 +6895,11 @@ int32 UMaterialExpressionMakeMaterialAttributes::Compile(class FMaterialCompiler
 	case MP_AmbientOcclusion: Ret = AmbientOcclusion.Compile(Compiler); Expression = AmbientOcclusion.Expression; break;
 	case MP_Refraction: Ret = Refraction.Compile(Compiler); Expression = Refraction.Expression; break;
 	case MP_PixelDepthOffset: Ret = PixelDepthOffset.Compile(Compiler); Expression = PixelDepthOffset.Expression; break;
+
+	//My-Add-29/05/24
+	case MP_SketchShadowUVScale:Ret = Refraction.Compile(Compiler); Expression = SketchShaowUVScale.Expression; break;
+	case MP_SketchColorMixing:Ret = Refraction.Compile(Compiler); Expression = SketchColorMixing.Expression; break;
+	//End
 
 	case MP_ShadingModel: Ret = ShadingModel.Compile(Compiler); Expression = ShadingModel.Expression; break;
 	};
@@ -6950,7 +6960,12 @@ UMaterialExpressionBreakMaterialAttributes::UMaterialExpressionBreakMaterialAttr
 
 	MenuCategories.Add(ConstructorStatics.NAME_MaterialAttributes);
 	
+	//My-Change-29/05/24
+	/*primitive
  	static_assert(MP_MAX == 35,
+	*/
+	static_assert(MP_MAX == 37,
+	//End
 		"New material properties should be added to the end of the outputs for this expression. \
 		The order of properties here should match the material results pins, the make material attributes node inputs and the mapping of IO indices to properties in GetMaterialPropertyFromInputOutputIndex().\
 		Insertions into the middle of the properties or a change in the order of properties will also require that existing data is fixed up in DoMaterialAttributesReorder().\
@@ -6978,6 +6993,11 @@ UMaterialExpressionBreakMaterialAttributes::UMaterialExpressionBreakMaterialAttr
 	{
 		Outputs.Add(FExpressionOutput(*FString::Printf(TEXT("CustomizedUV%u"), UVIndex), 1, 1, 1, 0, 0));
 	}
+
+	//My-Add-29/05/24
+	Outputs.Add(FExpressionOutput(TEXT("SketchShadowUVScale"), 1, 1, 1, 1, 0));
+	Outputs.Add(FExpressionOutput(TEXT("AketchColorMixing"), 1, 1, 1, 1, 0));
+	//End
 
 	Outputs.Add(FExpressionOutput(TEXT("PixelDepthOffset"), 1, 1, 0, 0, 0));
 	Outputs.Add(FExpressionOutput(TEXT("ShadingModel"), 0, 0, 0, 0, 0));
@@ -7026,6 +7046,12 @@ void UMaterialExpressionBreakMaterialAttributes::Serialize(FStructuredArchive::F
 		}
 
 		Outputs[OutputIndex].SetMask(1, 1, 0, 0, 0); ++OutputIndex;// PixelDepthOffset
+
+		//My-Add-29/05/24
+		Outputs[OutputIndex].SetMask(1, 1, 1, 1, 0); ++OutputIndex; // SketchShadowUVScale
+		Outputs[OutputIndex].SetMask(1, 1, 1, 1, 0); ++OutputIndex; // SketchColorMixing
+		//End
+		
 		Outputs[OutputIndex].SetMask(0, 0, 0, 0, 0); // ShadingModelFromMaterialExpression
 	}
 #endif // WITH_EDITOR
@@ -7063,8 +7089,17 @@ void UMaterialExpressionBreakMaterialAttributes::BuildPropertyToIOIndexMap()
 		PropertyToIOIndexMap.Add(MP_CustomizedUVs6,			22);
 		PropertyToIOIndexMap.Add(MP_CustomizedUVs7,			23);
 		PropertyToIOIndexMap.Add(MP_PixelDepthOffset,		24);
+
+		//My-Change-29/05/24
+		/*primitive
 		PropertyToIOIndexMap.Add(MP_ShadingModel,			25);
 		PropertyToIOIndexMap.Add(MP_Displacement,			26);
+		*/
+		PropertyToIOIndexMap.Add(MP_SketchShadowUVScale, 25);
+		PropertyToIOIndexMap.Add(MP_SketchColorMixing, 26);
+		PropertyToIOIndexMap.Add(MP_ShadingModel, 27);
+		PropertyToIOIndexMap.Add(MP_Displacement, 28);
+		//End
 	}
 }
 
