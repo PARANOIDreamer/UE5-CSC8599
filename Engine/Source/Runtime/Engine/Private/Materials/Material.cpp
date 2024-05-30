@@ -2837,7 +2837,8 @@ void UMaterial::Serialize(FArchive& Ar)
 	}
 #endif // #if WITH_EDITOR
 
-	static_assert(MP_MAX == 35, "New material properties must have DoMaterialAttributeReorder called on them to ensure that any future reordering of property pins is correctly applied.");
+	//My-Change-30/05/24
+	static_assert(MP_MAX == 37,/*primitive 35*/ "New material properties must have DoMaterialAttributeReorder called on them to ensure that any future reordering of property pins is correctly applied.");
 
 	if (Ar.UEVer() < VER_UE4_MATERIAL_MASKED_BLENDMODE_TIDY)
 	{
@@ -3876,6 +3877,12 @@ void UMaterial::PostLoad()
 	DoMaterialAttributeReorder(&EditorOnly->CustomizedUVs[6], UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->CustomizedUVs[7], UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->PixelDepthOffset, UEVer, RenderObjVer, UE5MainVer);
+
+	//My-Add-30/05/24
+	DoMaterialAttributeReorder(&EditorOnly->SketchShadowUVScale, UEVer, RenderObjVer, UE5MainVer);
+	DoMaterialAttributeReorder(&EditorOnly->SketchColorMixing, UEVer, RenderObjVer, UE5MainVer);
+	//End
+
 	DoMaterialAttributeReorder(&EditorOnly->ShadingModelFromMaterialExpression, UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->FrontMaterial, UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->SurfaceThickness, UEVer, RenderObjVer, UE5MainVer);
@@ -5938,6 +5945,12 @@ bool UMaterial::GetExpressionInputDescription(EMaterialProperty InProperty, FMat
 	case MP_SubsurfaceColor: SetMaterialInputDescription(EditorOnly->SubsurfaceColor, false, OutDescription); return true;
 	case MP_CustomData0: SetMaterialInputDescription(EditorOnly->ClearCoat, false, OutDescription); return true;
 	case MP_CustomData1: SetMaterialInputDescription(EditorOnly->ClearCoatRoughness, false, OutDescription); return true;
+
+	//My-Add-30/05/24
+	case MP_SketchShadowUVScale: SetMaterialInputDescription(EditorOnly->SketchShadowUVScale, false, OutDescription); return true;
+	case MP_SketchColorMixing: SetMaterialInputDescription(EditorOnly->SketchColorMixing, false, OutDescription); return true;
+	//End
+
 	case MP_AmbientOcclusion: SetMaterialInputDescription(EditorOnly->AmbientOcclusion, false, OutDescription); return true;
 	case MP_Refraction: SetMaterialInputDescription(EditorOnly->Refraction, false, OutDescription); return true;
 	case MP_MaterialAttributes: SetMaterialInputDescription(EditorOnly->MaterialAttributes, false, OutDescription); return true;
@@ -6543,6 +6556,12 @@ int32 UMaterial::CompilePropertyEx( FMaterialCompiler* Compiler, const FGuid& At
 		case MP_Anisotropy:				return EditorOnly->Anisotropy.CompileWithDefault(Compiler, Property);
 		case MP_CustomData0:			return EditorOnly->ClearCoat.CompileWithDefault(Compiler, Property);
 		case MP_CustomData1:			return EditorOnly->ClearCoatRoughness.CompileWithDefault(Compiler, Property);
+
+		//My-Add-30/05/24
+		case MP_SketchShadowUVScale:    return EditorOnly->SketchShadowUVScale.CompileWithDefault(Compiler, Property);
+		case MP_SketchColorMixing:		return EditorOnly->SketchColorMixing.CompileWithDefault(Compiler, Property);
+		//End
+
 		case MP_AmbientOcclusion:		return EditorOnly->AmbientOcclusion.CompileWithDefault(Compiler, Property);
 		case MP_Refraction:				return EditorOnly->Refraction.CompileWithDefault(Compiler, Property);
 		case MP_EmissiveColor:			return EditorOnly->EmissiveColor.CompileWithDefault(Compiler, Property);
@@ -7186,6 +7205,14 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 		case MP_CustomData1:
 			Active = ShadingModels.HasAnyShadingModel({ MSM_ClearCoat, MSM_Eye });
 			break;
+
+		//My-Add-30/05/24
+		case MP_SketchShadowUVScale: Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch, MSM_DefaultLit });
+			break;
+		case MP_SketchColorMixing:Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch });
+			break;
+		//End
+
 		case MP_EmissiveColor:
 			// Emissive is always active, even for light functions and post process materials, 
 			// but not for AlphaHoldout
