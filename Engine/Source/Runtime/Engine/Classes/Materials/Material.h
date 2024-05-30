@@ -368,6 +368,13 @@ public:
 	UPROPERTY()
 	FScalarMaterialInput AmbientOcclusion;
 
+	//My-Add-29/05/24
+	UPROPERTY()
+	FScalarMaterialInput SketchShadowUVScale;
+	UPROPERTY()
+	FScalarMaterialInput SketchColorMixing;
+	//End
+
 	/**
 	 * output refraction index for translucent rendering
 	 * Air:1.0 Water:1.333 Ice:1.3 Glass:~1.6 Diamond:2.42
