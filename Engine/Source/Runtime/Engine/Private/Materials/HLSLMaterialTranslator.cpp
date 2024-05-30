@@ -699,6 +699,12 @@ FHLSLMaterialTranslator::FHLSLMaterialTranslator(FMaterial* InMaterial,
 	SharedPixelProperties[MP_Refraction] = true;
 	SharedPixelProperties[MP_PixelDepthOffset] = true;
 	SharedPixelProperties[MP_SubsurfaceColor] = true;
+
+	//My-add-30/05/24
+	SharedPixelProperties[MP_SketchShadowUVScale] = true;
+	SharedPixelProperties[MP_SketchColorMixing] = true;
+	//End
+
 	SharedPixelProperties[MP_ShadingModel] = true;
 	SharedPixelProperties[MP_SurfaceThickness] = true;
 	SharedPixelProperties[MP_FrontMaterial] = true;
@@ -1485,6 +1491,11 @@ void FHLSLMaterialTranslator::DoTranslate()
 		Chunk[MP_Tangent] = Material->CompilePropertyAndSetMaterialProperty(MP_Tangent				,this);
 		Chunk[MP_WorldPositionOffset] = Material->CompilePropertyAndSetMaterialProperty(MP_WorldPositionOffset	,this);
 
+		//My-Add-30/05/24
+		Chunk[MP_SketchShadowUVScale] = Material->CompilePropertyAndSetMaterialProperty(MP_SketchShadowUVScale, this);
+		Chunk[MP_SketchColorMixing] = Material->CompilePropertyAndSetMaterialProperty(MP_SketchColorMixing, this);
+		//End
+
 		// Make sure to compile this property before using ShadingModelsFromCompilation
 		Chunk[MP_ShadingModel] = Material->CompilePropertyAndSetMaterialProperty(MP_ShadingModel			,this);
 
@@ -1541,6 +1552,11 @@ void FHLSLMaterialTranslator::DoTranslate()
 		Chunk[MP_CustomData0] = Material->CompilePropertyAndSetMaterialProperty(MP_CustomData0, this);
 		Chunk[MP_CustomData1] = Material->CompilePropertyAndSetMaterialProperty(MP_CustomData1, this);
 		Chunk[MP_AmbientOcclusion] = Material->CompilePropertyAndSetMaterialProperty(MP_AmbientOcclusion, this);
+
+		//My-add-30/05/24
+		Chunk[MP_SketchShadowUVScale] = Material->CompilePropertyAndSetMaterialProperty(MP_SketchShadowUVScale, this);
+		Chunk[MP_SketchColorMixing] = Material->CompilePropertyAndSetMaterialProperty(MP_SketchColorMixing, this);
+		//End
 
 		if (IsTranslucentBlendMode(BlendMode) || MaterialShadingModels.HasShadingModel(MSM_SingleLayerWater))
 		{
