@@ -257,6 +257,12 @@
 #define SUBSTRATE_USE_FULLYSIMPLIFIED_MATERIAL				0
 #endif
 
+//My-Add-03/06/24
+#ifndef MATERIAL_SHADINGMODEL_SKETCH
+#define MATERIAL_SHADINGMODEL_SKETCH                        0
+#endif
+//End
+
 // Those define usage should match the meaning of ESubstrateMaterialExport enum from MaterialCompiler.h
 #define SUBSTRATE_MATERIAL_EXPORT_DIFFUSE_COLOR				1
 #define SUBSTRATE_MATERIAL_EXPORT_NORMAL						2
