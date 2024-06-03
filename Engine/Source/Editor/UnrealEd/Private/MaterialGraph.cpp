@@ -270,6 +270,11 @@ void UMaterialGraph::RebuildGraphInternal(const TMap<UMaterialExpression*, TArra
 		//^^^ New material properties go above here. ^^^^
 		MaterialInputs.Add(FMaterialInputInfo(LOCTEXT("MaterialAttributes", "Material Attributes"), MP_MaterialAttributes, LOCTEXT("MaterialAttributesToolTip", "Material Attributes")));
 
+		//My-Add-03/06/14
+		MaterialInputs.Add(FMaterialInputInfo(FMaterialAttributeDefinitionMap::GetDisplayNameForMaterial(MP_SketchShadowUVScale, Material), MP_SketchShadowUVScale, LOCTEXT("SketchShadowUVScaleTip", "Sketch UV Scale")));
+		MaterialInputs.Add(FMaterialInputInfo(FMaterialAttributeDefinitionMap::GetDisplayNameForMaterial(MP_SketchColorMixing, Material), MP_SketchColorMixing, LOCTEXT("SketchColorMixingTip", "Sketch Color Mixing")));
+		//End
+
 		// FrontMaterial is always added the latest for UX purpose
 		MaterialInputs.Add(FMaterialInputInfo(FMaterialAttributeDefinitionMap::GetDisplayNameForMaterial(MP_FrontMaterial, Material), MP_FrontMaterial, LOCTEXT("FrontMaterialToolTip", "Specify the front facing material")));
 
