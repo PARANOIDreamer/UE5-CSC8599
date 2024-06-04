@@ -317,7 +317,11 @@ bool HasCustomGBufferData(int ShadingModelID)
 		|| ShadingModelID == SHADINGMODELID_TWOSIDED_FOLIAGE
 		|| ShadingModelID == SHADINGMODELID_HAIR
 		|| ShadingModelID == SHADINGMODELID_CLOTH
-		|| ShadingModelID == SHADINGMODELID_EYE;
+		|| ShadingModelID == SHADINGMODELID_EYE//;
+	
+//My-Add-04/06/24
+		|| ShadingModelID == SHADINGMODELID_SKETCH;
+//End
 }
 
 bool HasAnisotropy(int SelectiveOutputMask)
