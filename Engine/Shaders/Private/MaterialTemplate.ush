@@ -3597,6 +3597,18 @@ half4 GetMaterialSubsurfaceData(FPixelMaterialInputs PixelMaterialInputs)
 	return OutSubsurface;
 }
 
+//My-Add-04/06/24
+half GetMaterialSketchShadowUVScaleParm(FPixelMaterialInputs PixellMaterialInputs)
+{
+	return PixelMatterialInputs.SketchShadowUVScale;
+}
+											
+half GetMaterialSketchColorMixingParm(FPixelMaterialInputs PixelMaterialInputs)
+{
+	return saturate(PixelMaterialInputs.SketchColorMixing);
+}
+//End
+											
 half GetMaterialCustomData0(in out FMaterialPixelParameters Parameters)
 {
 %{get_material_custom_data0};
