@@ -68,13 +68,13 @@ class UMaterialExpressionMakeMaterialAttributes : public UMaterialExpression
 	UPROPERTY()
 	FExpressionInput PixelDepthOffset;
 
-	//My-Add-29/05/24
+//My-Add-SketchPipeline
 	UPROPERTY()
-	FExpressionInput SketchShaowUVScale;
+	FExpressionInput SketchShadowUVScale;
 
 	UPROPERTY()
 	FExpressionInput SketchColorMixing;
-	//End
+//End-11/06/24
 
 	UPROPERTY()
 	FExpressionInput ShadingModel;
@@ -96,8 +96,6 @@ class UMaterialExpressionMakeMaterialAttributes : public UMaterialExpression
 	virtual bool IsResultMaterialAttributes(int32 OutputIndex) override {return true;}
 	virtual uint32 GetInputType(int32 InputIndex) override;
 	virtual bool GenerateHLSLExpression(FMaterialHLSLGenerator& Generator, UE::HLSLTree::FScope& Scope, int32 OutputIndex, UE::HLSLTree::FExpression const*& OutExpression) const override;
-
-	uint64 GetConnectedInputs() const;
 #endif // WITH_EDITOR
 	//~ End UMaterialExpression Interface
 };
