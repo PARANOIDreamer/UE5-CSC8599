@@ -11,6 +11,14 @@
 #include "UObject/Object.h"
 #include "UObject/Class.h"
 #include "Templates/SubclassOf.h"
+#if UE_ENABLE_INCLUDE_ORDER_DEPRECATED_IN_5_1
+#include "Engine/NetSerialization.h"
+#include "Engine/ActorInstanceHandle.h"
+#include "Engine/HitResult.h"
+#include "Engine/OverlapResult.h"
+#include "Engine/DamageEvents.h"
+#include "Engine/ReplicatedState.h"
+#endif
 #include "Engine/TimerHandle.h"
 #include "EngineTypes.generated.h"
 
@@ -435,6 +443,9 @@ namespace EDynamicGlobalIlluminationMethod
 		/** Standalone Screen Space Global Illumination.  Low cost, but limited by screen space information. */
 		ScreenSpace UMETA(DisplayName="Screen Space (Beta)"),
 
+		/** Standalone Ray Traced Global Illumination technique.  Deprecated, use Lumen Global Illumination instead. */
+		RayTraced UMETA(DisplayName="Standalone Ray Traced (Deprecated)"),
+
 		/** Use a plugin for Global Illumination */
 		Plugin UMETA(DisplayName="Plugin"),
 	};
@@ -454,6 +465,9 @@ namespace EReflectionMethod
 
 		/** Standalone Screen Space Reflections.  Low cost, but limited by screen space information. */
 		ScreenSpace UMETA(DisplayName="Screen Space"),
+
+		/** Standalone Ray Traced Reflections technique.  Deprecated, use Lumen Reflections instead. */
+		RayTraced UMETA(DisplayName="Standalone Ray Traced (Deprecated)"),
 	};
 }
 
@@ -580,19 +594,6 @@ namespace EGBufferFormat
 	};
 }
 
-
-/** 
- * Enumerates available MobileLocalLightSetting. 
- * @warning When this enum is updated please update CVarMobileForwardEnableLocalLights comments 
- */
-UENUM()
-enum EMobileLocalLightSetting : int
-{
-	LOCAL_LIGHTS_DISABLED UMETA(DisplayName = "Local Lights Disabled"),
-	LOCAL_LIGHTS_ENABLED UMETA(DisplayName = "Local Lights Enabled"),
-	LOCAL_LIGHTS_BUFFER UMETA(DisplayName = "Local Lights Buffer Enabled")
-};
-
 /** Controls the way that the width scale property affects animation trails. */
 UENUM()
 enum ETrailWidthMode : int
@@ -633,12 +634,12 @@ enum EMaterialShadingModel : int
 	MSM_SingleLayerWater		UMETA(DisplayName="SingleLayerWater"),
 	MSM_ThinTranslucent			UMETA(DisplayName="Thin Translucent"),
 	MSM_Strata					UMETA(DisplayName="Substrate", Hidden),
-	
-	//My-Add-29/05/24
-	MSM_Sketch					UMETA(DisplayName="Sketch"),
-	//End
-
 	/** Number of unique shading models. */
+
+//My-Add-SketchPipeline
+	MSM_Sketch					UMETA(DisplayName="Sketch"),
+//End-11/06/24
+
 	MSM_NUM						UMETA(Hidden),
 	/** Shading model will be determined by the Material Expression Graph,
 		by utilizing the 'Shading Model' MaterialAttribute output pin. */
@@ -695,49 +696,50 @@ private:
 
 /**
  * Specifies the Substrate runtime shading model summarized from the material graph
- * Not exposed in UI, only used in code.
- * Those states are deducted from the material graph and map to a specific domain/shading state.
  */
-enum ESubstrateShadingModel : int
+UENUM()
+enum EStrataShadingModel : int
 {
-	SSM_Unlit,
-	SSM_DefaultLit,
-	SSM_ThinTranslucent,
-	SSM_SubsurfaceMFP,
-	SSM_SubsurfaceProfile,
-	SSM_SubsurfaceWrap,
-	SSM_SubsurfaceThinTwoSided,
-	SSM_VolumetricFogCloud,
-	SSM_Hair,
-	SSM_Eye,
-	SSM_Cloth,
-	SSM_ClearCoat,
-	SSM_SingleLayerWater,
-	SSM_LightFunction,
-	SSM_PostProcess,
-	SSM_Decal,
-	SSM_UI,
+	SSM_Unlit					UMETA(DisplayName = "Unlit"),
+	SSM_DefaultLit				UMETA(DisplayName = "DefaultLit"),
+	SSM_SubsurfaceLit			UMETA(DisplayName = "SubsurfaceLit"),
+	SSM_VolumetricFogCloud		UMETA(DisplayName = "VolumetricFogCloud"),
+	SSM_Hair					UMETA(DisplayName = "Hair"),
+	SSM_Eye						UMETA(DisplayName = "Eye"),
+	SSM_Cloth					UMETA(DisplayName = "Cloth"),
+	SSM_ClearCoat				UMETA(DisplayName = "ClearCoat"),
+	SSM_SingleLayerWater		UMETA(DisplayName = "SingleLayerWater"),
+	SSM_LightFunction			UMETA(DisplayName = "LightFunction"),
+	SSM_PostProcess				UMETA(DisplayName = "PostProcess"),
+	SSM_Decal					UMETA(DisplayName = "Decal"),
+	SSM_UI						UMETA(DisplayName = "UI"),
 	/** Number of unique shading models. */
-	SSM_NUM,
+	SSM_NUM						UMETA(Hidden),
 };
-static_assert(SSM_NUM <= 32, "Do not exceed 32 shading models without expanding FSubstrateMaterialInfo::ShadingModelField to support more bits!");
+static_assert(SSM_NUM <= 16, "Do not exceed 16 shading models without expanding FStrataMaterialShadingModelField to support uint32 instead of uint16!");
 
 // This used to track cyclic graph which we do not support. We only support acyclic graph and a depth of 128 is already too high for a realistic use case.
-#define SUBSTRATE_TREE_MAX_DEPTH 48
+#define STRATA_TREE_MAX_DEPTH 48
 
 /** Gather information from the Substrate material graph to setup material for runtime. */
-struct FSubstrateMaterialInfo
+USTRUCT()
+struct FStrataMaterialInfo
 {
+	GENERATED_USTRUCT_BODY()
+
 public:
-	FSubstrateMaterialInfo(bool bGatherGuids = false) { bGatherMaterialExpressionGuids = bGatherGuids; }
-	FSubstrateMaterialInfo(ESubstrateShadingModel InShadingModel) { AddShadingModel(InShadingModel); }
+	FStrataMaterialInfo() {}
+	FStrataMaterialInfo(EStrataShadingModel InShadingModel) { AddShadingModel(InShadingModel); }
+
+	ENGINE_API bool Serialize(FArchive& Ar);
+	ENGINE_API void PostSerialize(const FArchive& Ar);
 
 	// Shading model
-	void AddShadingModel(ESubstrateShadingModel InShadingModel) { check(InShadingModel < SSM_NUM); ShadingModelField |= (1u << (uint32)InShadingModel); }
-	void SetSingleShadingModel(ESubstrateShadingModel InShadingModel) { check(InShadingModel < SSM_NUM); ShadingModelField = (1u << (uint32)InShadingModel); }
-	bool HasShadingModel(ESubstrateShadingModel InShadingModel) const { return (ShadingModelField & (1u << (uint32)InShadingModel)) != 0; }
-	bool HasOnlyShadingModel(ESubstrateShadingModel InShadingModel) const { return ShadingModelField == (1u << (uint32)InShadingModel); }
-	uint32 GetShadingModelField() const { return ShadingModelField; }
+	void AddShadingModel(EStrataShadingModel InShadingModel) { check(InShadingModel < SSM_NUM); ShadingModelField |= (uint16)(1 << (uint16)InShadingModel); }
+	void SetSingleShadingModel(EStrataShadingModel InShadingModel) { check(InShadingModel < SSM_NUM); ShadingModelField = (uint16)(1 << (uint16)InShadingModel); }
+	bool HasShadingModel(EStrataShadingModel InShadingModel) const { return (ShadingModelField & (1 << (uint16)InShadingModel)) != 0; }
+	bool HasOnlyShadingModel(EStrataShadingModel InShadingModel) const { return ShadingModelField == (1 << (uint16)InShadingModel); }
+	uint16 GetShadingModelField() const { return ShadingModelField; }
 	int32 CountShadingModels() const { return FMath::CountBits(ShadingModelField); }
 
 	// Subsurface profiles
@@ -754,10 +756,6 @@ public:
 	void SetShadingModelFromExpression(bool bIn) { bHasShadingModelFromExpression = bIn ? 1u : 0u; }
 	bool HasShadingModelFromExpression() const { return bHasShadingModelFromExpression > 0u; }
 
-	// Substrate material expression GUIDs
-	void AddGuid(const FGuid& In) { if (bGatherMaterialExpressionGuids) { MaterialExpressionGuids.Add(In); } }
-	const TArray<FGuid>& GetGuids() const { return MaterialExpressionGuids; }
-
 	uint64 GetPropertyConnected() const { return ConnectedPropertyMask; }
 	void AddPropertyConnected(uint64 In) { ConnectedPropertyMask |= (1ull << In); }
 	bool HasPropertyConnected(uint64 In) const { return !!(ConnectedPropertyMask & (1ull << In)); }
@@ -765,43 +763,47 @@ public:
 
 	bool IsValid() const { return (ShadingModelField > 0) && (ShadingModelField < (1 << SSM_NUM)); }
 
-	bool operator==(const FSubstrateMaterialInfo& Other) const { return ShadingModelField == Other.GetShadingModelField(); }
-	bool operator!=(const FSubstrateMaterialInfo& Other) const { return ShadingModelField != Other.GetShadingModelField(); }
+	bool operator==(const FStrataMaterialInfo& Other) const { return ShadingModelField == Other.GetShadingModelField(); }
+	bool operator!=(const FStrataMaterialInfo& Other) const { return ShadingModelField != Other.GetShadingModelField(); }
 
 #if WITH_EDITOR
 	// Returns true if everything went fine (not out of Substrate tree stack)
-	bool PushSubstrateTreeStack()
+	bool PushStrataTreeStack()
 	{
-		bOutOfStackDepthWhenParsing = bOutOfStackDepthWhenParsing || (++ParsingStackDepth > SUBSTRATE_TREE_MAX_DEPTH);
+		bOutOfStackDepthWhenParsing = bOutOfStackDepthWhenParsing || (++ParsingStackDepth > STRATA_TREE_MAX_DEPTH);
 		return !bOutOfStackDepthWhenParsing;
 	}
-	void PopSubstrateTreeStack()
+	void PopStrataTreeStack()
 	{
 		ParsingStackDepth--;
 		check(ParsingStackDepth >= 0);
 	}
-	bool GetSubstrateTreeOutOfStackDepthOccurred() 
+	bool GetStrataTreeOutOfStackDepthOccurred() 
 	{
 		return bOutOfStackDepthWhenParsing;
 	}
 #endif
 
 private:
-	uint32 ShadingModelField = 0;
+	UPROPERTY()
+	uint16 ShadingModelField = 0;
 
 	/* Indicates if the shading model is constant or data-driven from the shader graph */
+	UPROPERTY()
 	uint8 bHasShadingModelFromExpression = 0;
 
+	UPROPERTY()
+	uint32 ConnectedProperties_DEPRECATED = 0;
+
 	/* Indicates which (legacy) inputs are connected */
+	UPROPERTY()
 	uint64 ConnectedPropertyMask = 0;
 
+	UPROPERTY()
 	TArray<TObjectPtr<USubsurfaceProfile>> SubsurfaceProfiles;
 
+	UPROPERTY()
 	TArray<TObjectPtr<USpecularProfile>> SpecularProfiles;
-	
-	/* Material expression GUIDs for all the traversed Substrate nodes */
-	bool bGatherMaterialExpressionGuids = false;
-	TArray<FGuid> MaterialExpressionGuids;
 
 #if WITH_EDITOR
 	// A simple way to detect and prevent node re-entry due to cycling graph; stop the compilation and avoid crashing.
@@ -811,7 +813,7 @@ private:
 };
 
 template<>
-struct TStructOpsTypeTraits<FSubstrateMaterialInfo> : public TStructOpsTypeTraitsBase2<FSubstrateMaterialInfo>
+struct TStructOpsTypeTraits<FStrataMaterialInfo> : public TStructOpsTypeTraitsBase2<FStrataMaterialInfo>
 {
 	enum
 	{
@@ -1559,42 +1561,6 @@ FORCEINLINE ECollisionEnabled::Type CollisionEnabledIntersection(ECollisionEnabl
 	return ECollisionEnabled::NoCollision;
 }
 
-/** Convert a set of three bools into an ECollisionEnabled */
-FORCEINLINE ECollisionEnabled::Type CollisionEnabledFromFlags(const bool bQuery, const bool bPhysics, const bool bProbe)
-{
-	// Convert to ints for bit manipulation
-	const int32 QueryBit = static_cast<uint32>(bQuery);
-	const int32 PhysicsBit = static_cast<uint32>(bPhysics);
-	const int32 ProbeBit = static_cast<uint32>(bProbe);
-
-	// NOTE:
-	// We use &~ between physics and probe because we cannot have a case with
-	// both enabled, and in every case probe "beats" physics. See the collision
-	// type rules outlined in the comments in CollisionEnabledIntersection.
-	//
-	// index    type              bits: probe/physics/query
-	// ----------------------------------------------------
-	// 0        NoCollision       000
-	// 1        QueryOnly         001
-	// 2        PhysicsOnly       010
-	// 3        QueryAndPhysics   011
-	// 4        ProbeOnly         100 (& 110)
-	// 5        QueryAndProbe     101 (& 111)
-	return static_cast<ECollisionEnabled::Type>(
-		(QueryBit << 0) |
-		(PhysicsBit & (~ProbeBit)) << 1 |
-		(ProbeBit << 2));
-}
-
-/** Convert an ECollisionEnabled enum into a set of three bools */
-FORCEINLINE void CollisionEnabledToFlags(const ECollisionEnabled::Type CollisionEnabled, bool& bQuery, bool& bPhysics, bool& bProbe)
-{
-	const int32 Bits = static_cast<int32>(CollisionEnabled);
-	bQuery   = ((Bits & 0x1) != 0);
-	bPhysics = ((Bits & 0x2) != 0);
-	bProbe   = ((Bits & 0x4) != 0);
-}
-
 /** Describes type of wake/sleep event sent to the physics system */
 enum class ESleepEvent : uint8
 {
@@ -1843,31 +1809,28 @@ struct FBasedPosition
 struct FRotationConversionCache
 {
 	FRotationConversionCache()
+		: CachedQuat(FQuat::Identity)
+		, CachedRotator(FRotator::ZeroRotator)
 	{
 	}
 
 	/** Convert a FRotator to FQuat. Uses the cached conversion if possible, and updates it if there was no match. */
 	FORCEINLINE_DEBUGGABLE FQuat RotatorToQuat(const FRotator& InRotator) const
 	{
-		FPayload& Payload = GetOrCreatePayload();
-		if (LIKELY(Payload.CachedRotator != InRotator))
+		if (CachedRotator != InRotator)
 		{
-			Payload.CachedRotator = InRotator.GetNormalized();
-			Payload.CachedQuat = Payload.CachedRotator.Quaternion();
+			CachedRotator = InRotator.GetNormalized();
+			CachedQuat = CachedRotator.Quaternion();
 		}
-		return Payload.CachedQuat;
+		return CachedQuat;
 	}
 
 	/** Convert a FRotator to FQuat. Uses the cached conversion if possible, but does *NOT* update the cache if there was no match. */
 	FORCEINLINE_DEBUGGABLE FQuat RotatorToQuat_ReadOnly(const FRotator& InRotator) const
 	{
-		if (LIKELY(PayloadPtr.IsValid()))
+		if (CachedRotator == InRotator)
 		{
-			FPayload& Payload = *PayloadPtr;
-			if (LIKELY(Payload.CachedRotator == InRotator))
-			{
-				return Payload.CachedQuat;
-			}
+			return CachedQuat;
 		}
 		return InRotator.Quaternion();
 	}
@@ -1875,25 +1838,20 @@ struct FRotationConversionCache
 	/** Convert a FQuat to FRotator. Uses the cached conversion if possible, and updates it if there was no match. */
 	FORCEINLINE_DEBUGGABLE FRotator QuatToRotator(const FQuat& InQuat) const
 	{
-		FPayload& Payload = GetOrCreatePayload();
-		if (LIKELY(Payload.CachedQuat != InQuat))
+		if (CachedQuat != InQuat)
 		{
-			Payload.CachedQuat = InQuat.GetNormalized();
-			Payload.CachedRotator = Payload.CachedQuat.Rotator();
+			CachedQuat = InQuat.GetNormalized();
+			CachedRotator = CachedQuat.Rotator();
 		}
-		return Payload.CachedRotator;
+		return CachedRotator;
 	}
 
 	/** Convert a FQuat to FRotator. Uses the cached conversion if possible, but does *NOT* update the cache if there was no match. */
 	FORCEINLINE_DEBUGGABLE FRotator QuatToRotator_ReadOnly(const FQuat& InQuat) const
 	{
-		if (LIKELY(PayloadPtr.IsValid()))
+		if (CachedQuat == InQuat)
 		{
-			FPayload& Payload = *PayloadPtr;
-			if (LIKELY(Payload.CachedQuat == InQuat))
-			{
-				return Payload.CachedRotator;
-			}
+			return CachedRotator;
 		}
 		return InQuat.GetNormalized().Rotator();
 	}
@@ -1901,25 +1859,20 @@ struct FRotationConversionCache
 	/** Version of QuatToRotator when the Quat is known to already be normalized. */
 	FORCEINLINE_DEBUGGABLE FRotator NormalizedQuatToRotator(const FQuat& InNormalizedQuat) const
 	{
-		FPayload& Payload = GetOrCreatePayload();
-		if (LIKELY(Payload.CachedQuat != InNormalizedQuat))
+		if (CachedQuat != InNormalizedQuat)
 		{
-			Payload.CachedQuat = InNormalizedQuat;
-			Payload.CachedRotator = InNormalizedQuat.Rotator();
+			CachedQuat = InNormalizedQuat;
+			CachedRotator = InNormalizedQuat.Rotator();
 		}
-		return Payload.CachedRotator;
+		return CachedRotator;
 	}
 
 	/** Version of QuatToRotator when the Quat is known to already be normalized. Does *NOT* update the cache if there was no match. */
 	FORCEINLINE_DEBUGGABLE FRotator NormalizedQuatToRotator_ReadOnly(const FQuat& InNormalizedQuat) const
 	{
-		if (LIKELY(PayloadPtr.IsValid()))
+		if (CachedQuat == InNormalizedQuat)
 		{
-			FPayload& Payload = *PayloadPtr;
-			if (LIKELY(Payload.CachedQuat == InNormalizedQuat))
-			{
-				return Payload.CachedRotator;
-			}
+			return CachedRotator;
 		}
 		return InNormalizedQuat.Rotator();
 	}
@@ -1927,57 +1880,18 @@ struct FRotationConversionCache
 	/** Return the cached Quat. */
 	FORCEINLINE_DEBUGGABLE FQuat GetCachedQuat() const
 	{
-		if (UNLIKELY(!PayloadPtr.IsValid()))
-		{
-			return FQuat::Identity;
-		}
-		return PayloadPtr->CachedQuat;
+		return CachedQuat;
 	}
 
 	/** Return the cached Rotator. */
 	FORCEINLINE_DEBUGGABLE FRotator GetCachedRotator() const
 	{
-		if (UNLIKELY(!PayloadPtr.IsValid()))
-		{
-			return FRotator::ZeroRotator;
-		}
-		return PayloadPtr->CachedRotator;
-	}
-
-	FRotationConversionCache& operator=(const FRotationConversionCache& Other)
-	{
-		if (LIKELY(PayloadPtr.IsValid() || Other.PayloadPtr.IsValid()))
-		{
-			FPayload& Payload = GetOrCreatePayload();
-			Payload.CachedQuat = Other.GetCachedQuat();
-			Payload.CachedRotator = Other.GetCachedRotator();
-		}
-		return *this;
+		return CachedRotator;
 	}
 
 private:
-
-	struct FPayload
-	{
-		mutable FQuat				CachedQuat;		// FQuat matching CachedRotator such that CachedQuat.Rotator() == CachedRotator.
-		mutable FRotator			CachedRotator;	// FRotator matching CachedQuat such that CachedRotator.Quaternion() == CachedQuat.
-
-		FPayload()
-		: CachedQuat(FQuat::Identity)
-		, CachedRotator(FRotator::ZeroRotator)
-		{}
-	};
-
-	inline FPayload&				GetOrCreatePayload() const
-	{
-		if (UNLIKELY(!PayloadPtr.IsValid()))
-		{
-			PayloadPtr = MakeUnique<FPayload>();
-		}
-		return *PayloadPtr;
-	}
-
-	mutable TUniquePtr<FPayload>	PayloadPtr;
+	mutable FQuat		CachedQuat;		// FQuat matching CachedRotator such that CachedQuat.Rotator() == CachedRotator.
+	mutable FRotator	CachedRotator;	// FRotator matching CachedQuat such that CachedRotator.Quaternion() == CachedQuat.
 };
 
 /** A line of subtitle text and the time at which it should be displayed. */
@@ -2918,19 +2832,6 @@ struct FMeshNaniteSettings
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
 	uint8 bExplicitTangents : 1;
 
-	/** Whether to interpolate UVs when simplifying.
-	 * Should be enabled whenever possible.
-	 * For real UV coordinates this allows calculating the lowest error optimal UVs for new vertices when simplifying,
-	 * assuming the UVs are used as normal texture coordinates and will interpolate across the face of the triangles.
-	 *
-	 * Disable if data stored in UVs isn't valid to interpolate, for example if indexes are stored in UVs.
-	 * Lerping an index doesn't make sense and would break the shader trying to use it.
-	 * Note: If disabled, error from UVs is no longer accounted for when Nanite selects the LOD to render because
-	 * error due to arbitary vertex attributes that aren't interpolatable can't be generally reasoned about.
-	 */
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
-	uint8 bLerpUVs : 1;
-
 	/** Position Precision. Step size is 2^(-PositionPrecision) cm. MIN_int32 is auto. */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
 	int32 PositionPrecision = MIN_int32;
@@ -2967,12 +2868,6 @@ struct FMeshNaniteSettings
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
 	float FallbackRelativeError = 1.0f;
 
-	/** Controls the maximum distance allowed between each vertex of the mesh on screen. Can be used to prevent oversimplification
-	 * of meshes that are intended to be deformed (e.g. animation using World Position Offset, Spline Mesh Component, etc.).
-	 * Should be left at default of 0 unless explicitly needed to fix oversimplification issues. */
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
-	float MaxEdgeLengthFactor = 0.0f;
-
 	/** UV channel used to sample displacement maps  */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = NaniteSettings)
 	int32 DisplacementUVChannel = 0;
@@ -2984,7 +2879,6 @@ struct FMeshNaniteSettings
 	: bEnabled(false)
 	, bPreserveArea(false)
 	, bExplicitTangents(false) // TODO: Should this be the default?
-	, bLerpUVs(true)
 	{}
 
 
@@ -3003,7 +2897,6 @@ struct FMeshNaniteSettings
 		return bEnabled == Other.bEnabled
 			&& bPreserveArea == Other.bPreserveArea
 			&& bExplicitTangents == Other.bExplicitTangents
-			&& bLerpUVs == Other.bLerpUVs
 			&& PositionPrecision == Other.PositionPrecision
 			&& NormalPrecision == Other.NormalPrecision
 			&& TangentPrecision == Other.TangentPrecision
@@ -3013,7 +2906,6 @@ struct FMeshNaniteSettings
 			&& FallbackTarget == Other.FallbackTarget
 			&& FallbackPercentTriangles == Other.FallbackPercentTriangles
 			&& FallbackRelativeError == Other.FallbackRelativeError
-			&& MaxEdgeLengthFactor == Other.MaxEdgeLengthFactor
 			&& DisplacementUVChannel == Other.DisplacementUVChannel;
 	}
 
@@ -3032,7 +2924,7 @@ struct FDisplacementScaling
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Displacement, meta = (NoSpinbox = true, ClampMin = "0.0", UIMin = "0.0"))
 	float Magnitude;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Displacement, meta = (NoSpinbox = true, ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Displacement, meta = (NoSpinbox = true, ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "0.0"))
 	float Center;
 
 public:
@@ -3058,18 +2950,18 @@ public:
 };
 
 /** The network role of an actor on a local/remote network context */
-UENUM(BlueprintType)
+UENUM()
 enum ENetRole : int
 {
 	/** No role at all. */
-	ROLE_None UMETA(DisplayName = "None"),
+	ROLE_None,
 	/** Locally simulated proxy of this actor. */
-	ROLE_SimulatedProxy UMETA(DisplayName = "Simulated Proxy"),
+	ROLE_SimulatedProxy,
 	/** Locally autonomous proxy of this actor. */
-	ROLE_AutonomousProxy UMETA(DisplayName = "Autonomous Proxy"),
+	ROLE_AutonomousProxy,
 	/** Authoritative control over the actor. */
-	ROLE_Authority UMETA(DisplayName = "Authority"),
-	ROLE_MAX UMETA(Hidden),
+	ROLE_Authority,
+	ROLE_MAX,
 };
 
 /** Describes if an actor can enter a low network bandwidth dormant mode */
@@ -3096,15 +2988,18 @@ enum class EPhysicsReplicationMode : uint8
 	/** Default physics replication.*/
 	Default UMETA(DisplayName = "Default"),
 
-	/** Work In Progress. Physics replication performing velocity interpolation.
+	/** Physics replication performing velocity interpolation.
 	* Recommendation: Set on actors with a local role of ENetRole::ROLE_SimulatedProxy.
-	* Designed to handle local predictive interactions with other actors, especially actors of the local role ENetRole::ROLE_AutonomousProxy. */
+	* Designed to handle local predictive interactions with other actors, especially actors of the local role ENetRole::ROLE_AutonomousProxy.
+	* Work in progress, available when Project Settings > Physics Prediction is enabled.
+	*/
 	PredictiveInterpolation UMETA(DisplayName = "Predictive Interpolation (WIP)"),
 
-	/** Work In Progress. Forward predicted replication by simulating physics and correcting errors through resimulating physics from a correct state in the past.
+	/** Forward predicted replication by simulating physics and correcting errors through resimulating physics from a correct state in the past.
 	* Recommendation: Set on actors with a local role of ENetRole::ROLE_AutonomousProxy.
 	* Can be used for both ROLE_AutonomousProxy and ROLE_SimulatedProxy, though not recommended for ROLE_SimulatedProxy due to CPU performance.
-	* Available when Project Settings > Physics Prediction is enabled. */
+	* Work in progress, available when Project Settings > Physics Prediction > Resimulation is enabled.
+	*/
 	Resimulation UMETA(DisplayName = "Resimulation (WIP)"),
 };
 
@@ -3401,15 +3296,6 @@ struct FBaseComponentReference
 		return ComponentProperty == Other.ComponentProperty && PathToComponent == Other.PathToComponent && OverrideComponent == Other.OverrideComponent;
 	}
 };
-
-inline uint32 GetTypeHash(const FBaseComponentReference& Reference)
-{
-	return HashCombineFast(
-		HashCombineFast(
-			GetTypeHash(Reference.ComponentProperty),
-			GetTypeHash(Reference.PathToComponent)),
-			GetTypeHash(Reference.OverrideComponent));
-}
 
 /** 
  *	Struct that allows for different ways to reference a component using TObjectPtr. 
