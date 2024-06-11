@@ -12,7 +12,6 @@
 
 #include "PrimitiveDirtyState.h"
 #include "PrimitiveComponentId.h"
-#include "LightDefinitions.h"
 
 #include "SceneTypes.generated.h"
 
@@ -107,18 +106,16 @@ private:
 	void AllocateInternal(ERHIFeatureLevel::Type FeatureLevel);
 };
 
-/** Different light component types. The enum uses values defined in a shared header with shader code so that the two sides are always consistent. */
+/** different light component types */
 enum ELightComponentType
 {
-	LightType_Directional = LIGHT_TYPE_DIRECTIONAL,
-	LightType_Point		  = LIGHT_TYPE_POINT,
-	LightType_Spot		  = LIGHT_TYPE_SPOT,
-	LightType_Rect 		  = LIGHT_TYPE_RECT,
-	LightType_MAX         = LIGHT_TYPE_MAX,
+	LightType_Directional = 0,
+	LightType_Point,
+	LightType_Spot,
+	LightType_Rect,
+	LightType_MAX,
 	LightType_NumBits = 2
 };
-
-static_assert(LightType_MAX <= (1 << LightType_NumBits), "LightType_NumBits is not large enough to hold all possible light types");
 
 /**
  * The types of interactions between a light and a primitive.
@@ -192,14 +189,14 @@ enum EMaterialProperty : int
 	MP_CustomizedUVs7 UMETA(Hidden),
 	MP_PixelDepthOffset UMETA(Hidden),
 	MP_ShadingModel UMETA(Hidden),
-	MP_FrontMaterial UMETA(DisplayName = "Front Material"),
+	MP_FrontMaterial UMETA(Hidden),
 	MP_SurfaceThickness UMETA(Hidden),
 	MP_Displacement UMETA(Hidden),
 
-	//My-Add-29/05/24
+//My-Add-SketchPipeline
 	MP_SketchShadowUVScale UMETA(DisplayName = "Sketch Shadow UV Scale"),
 	MP_SketchColorMixing UMETA(DisplayName = "Sketch Color Mixing"),
-	//End
+//End-11/06/24
 
 	//^^^ New material properties go above here ^^^^
 	MP_MaterialAttributes UMETA(Hidden),
@@ -249,17 +246,4 @@ enum class EShadowCacheInvalidationBehavior : uint8
 	 * If the primitive is actually moved or animated somehow the visual result is undefined.
 	 */
 	Static,
-};
-
-/**
- * This struct captures summary information about material features in the primitive
- */
-struct FPrimitiveMaterialPropertyDescriptor
-{
-	FVector2f MinMaxMaterialDisplacement = FVector2f::ZeroVector;
-	float MaxWorldPositionOffsetDisplacement = 0.0f;
-	bool bAnyMaterialHasWorldPositionOffset = false;
-	bool bAnyMaterialHasPixelAnimation = false;
-	bool bAnyMaterialHasPerInstanceCustomData = false;
-	bool bAnyMaterialHasPerInstanceRandom = false;
 };
