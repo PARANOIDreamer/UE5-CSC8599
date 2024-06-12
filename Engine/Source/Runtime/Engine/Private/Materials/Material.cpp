@@ -9,7 +9,6 @@
 #include "Stats/StatsMisc.h"
 #include "Misc/FeedbackContext.h"
 #include "Stats/StatsTrace.h"
-#include "UObject/AssetRegistryTagsContext.h"
 #include "UObject/ObjectSaveContext.h"
 #include "UObject/FortniteMainBranchObjectVersion.h"
 #include "UObject/UObjectIterator.h"
@@ -76,21 +75,18 @@
 #include "Materials/MaterialExpressionVolumetricAdvancedMaterialInput.h"
 #include "Materials/MaterialExpressionVolumetricAdvancedMaterialOutput.h"
 #include "Materials/MaterialExpressionCloudLayer.h"
-#include "Materials/MaterialExpressionSubstrate.h"
+#include "Materials/MaterialExpressionStrata.h"
 #include "Materials/MaterialExpressionThinTranslucentMaterialOutput.h"
 #include "Materials/MaterialExpressionClearCoatNormalCustomOutput.h"
 #include "Materials/MaterialExpressionTangentOutput.h"
 #include "Materials/MaterialExpressionConstant.h"
-#include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionBreakMaterialAttributes.h"
 #include "MaterialCachedData.h"
 #include "Misc/OutputDeviceArchiveWrapper.h"
 #include "HAL/FileManager.h"
 #include "BuildSettings.h"
-#include "LocalVertexFactory.h"
 
 #if WITH_EDITOR
-#include "Framework/Notifications/NotificationManager.h"
 #include "MaterialCachedHLSLTree.h"
 #include "Logging/MessageLog.h"
 #include "Misc/UObjectToken.h"
@@ -104,6 +100,20 @@
 #include "Misc/ScopedSlowTask.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(Material)
+
+#if ENABLE_COOK_STATS
+namespace MaterialCookStats
+{
+	static double MaterialUpdateCachedExpressionDataSec = 0.0;
+
+	static FCookStatsManager::FAutoRegisterCallback RegisterCookStats([](FCookStatsManager::AddStatFuncRef AddStat)
+		{
+			AddStat(TEXT("Material"), FCookStatsManager::CreateKeyValueArray(
+				TEXT("MaterialUpdateCachedExpressionDataSec"), MaterialUpdateCachedExpressionDataSec
+			));
+		});
+}
+#endif
 
 #define LOCTEXT_NAMESPACE "Material"
 
@@ -183,11 +193,6 @@ FMaterialResource::~FMaterialResource()
 int32 FMaterialResource::CompilePropertyAndSetMaterialProperty(EMaterialProperty Property, FMaterialCompiler* Compiler, EShaderFrequency OverrideShaderFrequency, bool bUsePreviousFrameTime) const
 {
 #if WITH_EDITOR
-	if (Compiler->ShouldStopTranslating())
-	{
-		return INDEX_NONE;
-	}
-
 	// needs to be called in this function!!
 	// sets CurrentShaderFrequency
 	Compiler->SetMaterialProperty(Property, OverrideShaderFrequency, bUsePreviousFrameTime);
@@ -582,36 +587,30 @@ void UMaterialInterface::InitDefaultMaterials()
 
 		// Now precache PSOs for all the default materials after the default materials are marked initialize
 		// PSO precaching can request default materials so they have to marked as initialized to avoid endless recursion
-		// Skip platforms that do not support MVF, non-MVF path needs mesh information for PSO 
-		if (bInitialized && PipelineStateCache::IsPSOPrecachingEnabled() && RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))
+		if (bInitialized && PipelineStateCache::IsPSOPrecachingEnabled())
 		{
-			PrecacheDefaultMaterialPSOs();
-		}
-	}
-}
+			TArray<FMaterialPSOPrecacheRequestID> MaterialPrecacheRequestIDs;
 
-void UMaterialInterface::PrecacheDefaultMaterialPSOs()
-{
-	TArray<FMaterialPSOPrecacheRequestID> MaterialPrecacheRequestIDs;
+			FPSOPrecacheParams PrecachePSOParams;
+			PrecachePSOParams.bDefaultMaterial = true;
+			FPSOPrecacheVertexFactoryDataList AllVertexFactoryTypes;
+			for (TLinkedList<FVertexFactoryType*>::TIterator It(FVertexFactoryType::GetTypeList()); It; It.Next())
+			{
+				FPSOPrecacheVertexFactoryData VFData;
+				VFData.VertexFactoryType = *It;
+				AllVertexFactoryTypes.Add(VFData);
+			}
+			for (int32 Domain = 0; Domain < MD_MAX; ++Domain)
+			{
+				if (GDefaultMaterials[Domain])
+				{
+					PrecachePSOParams.Mobility = EComponentMobility::Static;
+					GDefaultMaterials[Domain]->PrecachePSOs(AllVertexFactoryTypes, PrecachePSOParams, EPSOPrecachePriority::High, MaterialPrecacheRequestIDs);
 
-	FPSOPrecacheParams PrecachePSOParams;
-	PrecachePSOParams.bDefaultMaterial = true;
-	FPSOPrecacheVertexFactoryDataList AllVertexFactoryTypes;
-	for (TLinkedList<FVertexFactoryType*>::TIterator It(FVertexFactoryType::GetTypeList()); It; It.Next())
-	{
-		FPSOPrecacheVertexFactoryData VFData;
-		VFData.VertexFactoryType = *It;
-		AllVertexFactoryTypes.Add(VFData);
-	}
-	for (int32 Domain = 0; Domain < MD_MAX; ++Domain)
-	{
-		if (GDefaultMaterials[Domain])
-		{
-			PrecachePSOParams.Mobility = EComponentMobility::Static;
-			GDefaultMaterials[Domain]->PrecachePSOs(AllVertexFactoryTypes, PrecachePSOParams, EPSOPrecachePriority::High, MaterialPrecacheRequestIDs);
-
-			PrecachePSOParams.Mobility = EComponentMobility::Movable;
-			GDefaultMaterials[Domain]->PrecachePSOs(AllVertexFactoryTypes, PrecachePSOParams, EPSOPrecachePriority::High, MaterialPrecacheRequestIDs);
+					PrecachePSOParams.Mobility = EComponentMobility::Movable;
+					GDefaultMaterials[Domain]->PrecachePSOs(AllVertexFactoryTypes, PrecachePSOParams, EPSOPrecachePriority::High, MaterialPrecacheRequestIDs);
+				}
+			}
 		}
 	}
 }
@@ -734,7 +733,6 @@ void SerializeInlineShaderMaps(
 	const TMap<const ITargetPlatform*, TArray<FMaterialResource*>>* PlatformMaterialResourcesToSavePtr,
 	FArchive& Ar,
 	TArray<FMaterialResource>& OutLoadedResources,
-	const FName& SerializingAsset,
 	uint32* OutOffsetToFirstResource)
 {
 	LLM_SCOPE(ELLMTag::Shaders);
@@ -803,7 +801,7 @@ void SerializeInlineShaderMaps(
 			for (int32 ResourceIndex = 0; ResourceIndex < NumLoadedResources; ++ResourceIndex)
 			{
 				FMaterialResource& LoadedResource = OutLoadedResources[OutLoadedResources.AddDefaulted()];
-				LoadedResource.SerializeInlineShaderMap(ResourceAr, SerializingAsset);
+				LoadedResource.SerializeInlineShaderMap(ResourceAr);
 			}
 #endif
 		}
@@ -1008,15 +1006,13 @@ UMaterial::UMaterial(const FObjectInitializer& ObjectInitializer)
 	bCastRayTracedShadows = true;
 	bUseTranslucencyVertexFog = true;
 	bAllowFrontLayerTranslucency = true;
-	bHasPixelAnimation = false;
 	bApplyCloudFogging = false;
 	bIsSky = false;
 	bUsedWithWater = false;
-	BlendableLocation = BL_SceneColorAfterTonemapping;
+	BlendableLocation = BL_AfterTonemapping;
 	BlendablePriority = 0;
 	BlendableOutputAlpha = false;
 	bIsBlendable = true;
-	PreshaderGap = 0;
 	bEnableStencilTest = false;
 	bUsedWithVolumetricCloud = false;
 	bUsedWithHeterogeneousVolumes = false;
@@ -1025,15 +1021,13 @@ UMaterial::UMaterial(const FObjectInitializer& ObjectInitializer)
 	RefractionDepthBias = 0.0f;
 	MaterialDecalResponse = MDR_ColorNormalRoughness;
 
-	SubstrateCompilationConfig = FSubstrateCompilationConfig();
+	StrataCompilationConfig = FStrataCompilationConfig();
 
 	bAllowDevelopmentShaderCompile = true;
 	bIsMaterialEditorStatsMaterial = false;
 
 	RefractionMethod = RM_None;
 	RefractionCoverageMode = RCM_CoverageAccountedFor;
-
-	bAllowVariableRateShading = true;
 
 #if WITH_EDITORONLY_DATA
 	MaterialGraph = NULL;
@@ -1090,6 +1084,8 @@ void UMaterial::GetUsedTextures(TArray<UTexture*>& OutTextures, EMaterialQuality
 
 	if (!FPlatformProperties::IsServerOnly())
 	{
+		const UMaterialInstance* MaterialInstance = Cast<UMaterialInstance>(this);
+
 		FInt32Range QualityLevelRange(0, EMaterialQualityLevel::Num - 1);
 		if (!bAllQualityLevels)
 		{
@@ -1141,32 +1137,33 @@ void UMaterial::GetUsedTextures(TArray<UTexture*>& OutTextures, EMaterialQuality
 			}
 
 #if WITH_EDITOR
-/*
-			// Also look for any scalar parameters that are acting as lookups for an atlas texture, and store the atlas texture
-			const TArrayView<const FMaterialNumericParameterInfo> AtlasExpressions[1] =
+			if (MaterialInstance)
 			{
-				CurrentResource->GetUniformNumericParameterExpressions()
-			};
-
-			for (int32 TypeIndex = 0; TypeIndex < UE_ARRAY_COUNT(AtlasExpressions); TypeIndex++)
-			{
-				// Iterate over each of the material's texture expressions.
-				for (const FMaterialNumericParameterInfo& Parameter : AtlasExpressions[TypeIndex])
+				// Also look for any scalar parameters that are acting as lookups for an atlas texture, and store the atlas texture
+				const TArrayView<const FMaterialNumericParameterInfo> AtlasExpressions[1] =
 				{
-					if (Parameter.ParameterType == EMaterialParameterType::Scalar)
+					CurrentResource->GetUniformNumericParameterExpressions()
+				};
+
+				for (int32 TypeIndex = 0; TypeIndex < UE_ARRAY_COUNT(AtlasExpressions); TypeIndex++)
+				{
+					// Iterate over each of the material's texture expressions.
+					for (const FMaterialNumericParameterInfo& Parameter : AtlasExpressions[TypeIndex])
 					{
-						bool bIsUsedAsAtlasPosition;
-						TSoftObjectPtr<UCurveLinearColor> Curve;
-						TSoftObjectPtr<UCurveLinearColorAtlas> Atlas;
-						IsScalarParameterUsedAsAtlasPosition(Parameter.ParameterInfo, bIsUsedAsAtlasPosition, Curve, Atlas);
-						if (Atlas)
+						if (Parameter.ParameterType == EMaterialParameterType::Scalar)
 						{
-							OutTextures.AddUnique(Atlas.Get());
+							bool bIsUsedAsAtlasPosition;
+							TSoftObjectPtr<class UCurveLinearColor> Curve;
+							TSoftObjectPtr<class UCurveLinearColorAtlas> Atlas;
+							MaterialInstance->IsScalarParameterUsedAsAtlasPosition(Parameter.ParameterInfo, bIsUsedAsAtlasPosition, Curve, Atlas);
+							if (Atlas)
+							{
+								OutTextures.AddUnique(Atlas.Get());
+							}
 						}
 					}
 				}
 			}
-*/
 #endif // WITH_EDITOR
 		}
 	}
@@ -1402,9 +1399,8 @@ bool UMaterial::IsUsageFlagDirty(EMaterialUsage Usage)
 {
 #if WITH_EDITOR
 	return GMaterialsWithDirtyUsageFlags.GetAnnotation(this).IsUsageFlagDirty(Usage);
-#else
-	return false;
 #endif
+	return false;
 }
 
 bool UMaterial::IsCompilingOrHadCompileError(ERHIFeatureLevel::Type InFeatureLevel)
@@ -1726,7 +1722,7 @@ bool UMaterial::CheckMaterialUsage_Concurrent(EMaterialUsage Usage) const
 						Material->CheckMaterialUsage(Usage);
 					}
 				};
-				UE_LOG(LogMaterial, Log, TEXT("Had to pass SMU back to game thread. Please fix material usage flag %s on %s"), *GetUsageName(Usage), *GetPathNameSafe(this));
+				UE_LOG(LogMaterial, Log, TEXT("Had to pass SMU back to game thread. Please ensure correct material usage flags."));
 
 				TSharedRef<FCallSMU, ESPMode::ThreadSafe> CallSMU = MakeShareable(new FCallSMU(const_cast<UMaterial*>(this), Usage));
 
@@ -2056,6 +2052,8 @@ void UMaterial::UpdateTransientExpressionData()
 #if WITH_EDITOR
 void UMaterial::UpdateCachedExpressionData()
 {
+	COOK_STAT(FScopedDurationTimer BlockingTimer(MaterialCookStats::MaterialUpdateCachedExpressionDataSec));
+
 	//@note FH: temporary preemptive PostLoad until zenloader load ordering improvements
 	ConditionalPostLoad();
 
@@ -2074,7 +2072,7 @@ void UMaterial::UpdateCachedExpressionData()
 
 		LocalCachedTree = new FMaterialCachedHLSLTree();
 		LocalCachedTree->GenerateTree(this, nullptr, nullptr);
-		LocalCachedExpressionData->UpdateForCachedHLSLTree(*LocalCachedTree, nullptr, this);
+		LocalCachedExpressionData->UpdateForCachedHLSLTree(*LocalCachedTree, nullptr);
 	}
 	else
 	{
@@ -2089,7 +2087,7 @@ void UMaterial::UpdateCachedExpressionData()
 		LocalCachedExpressionData->EditorOnlyData->MaterialLayers.LinkAllLayersToParent();
 	}
 
-	LocalCachedExpressionData->Validate(*this);
+	LocalCachedExpressionData->Validate();
 
 	CachedExpressionData.Reset(LocalCachedExpressionData);
 	CachedHLSLTree.Reset(LocalCachedTree);
@@ -2216,19 +2214,19 @@ EMaterialShadingModel UMaterial::GetMaterialShadingModelFromString(const TCHAR* 
 
 const TCHAR* UMaterial::GetBlendModeString(EBlendMode InBlendMode)
 {
-	const bool bSubstrateEnabled = Substrate::IsSubstrateEnabled();
+	const bool bStrataEnabled = Strata::IsStrataEnabled();
 	switch (InBlendMode)
 	{
 	case BLEND_Opaque:							return TEXT("BLEND_Opaque");
 	case BLEND_Masked:							return TEXT("BLEND_Masked");
 	// BLEND_Translucent & BLEND_TranslucentGreyTransmittance are mapped onto the same enum index
-	case BLEND_Translucent:						return bSubstrateEnabled ? TEXT("BLEND_TranslucentGreyTransmittance") : TEXT("BLEND_Translucent");
+	case BLEND_Translucent:						return bStrataEnabled ? TEXT("BLEND_TranslucentGreyTransmittance") : TEXT("BLEND_Translucent");
 	case BLEND_Additive:						return TEXT("BLEND_Additive");
 	// BLEND_Modulate & BLEND_ColoredTransmittanceOnly are mapped onto the same enum index
-	case BLEND_Modulate:						return bSubstrateEnabled ? TEXT("BLEND_ColoredTransmittanceOnly") : TEXT("BLEND_Modulate");
+	case BLEND_Modulate:						return bStrataEnabled ? TEXT("BLEND_ColoredTransmittanceOnly") : TEXT("BLEND_Modulate");
 	case BLEND_AlphaComposite:					return TEXT("BLEND_AlphaComposite");
 	case BLEND_AlphaHoldout:					return TEXT("BLEND_AlphaHoldout");
-	case BLEND_TranslucentColoredTransmittance: return bSubstrateEnabled ? TEXT("BLEND_TranslucentColoredTransmittance") : TEXT("BLEND_TranslucentColoredTransmittance_SUBSTRATEONLY");
+	case BLEND_TranslucentColoredTransmittance: return bStrataEnabled ? TEXT("BLEND_TranslucentColoredTransmittance") : TEXT("BLEND_TranslucentColoredTransmittance_STRATAONLY");
 	}
 	return TEXT("BLEND_Opaque");
 }
@@ -2525,14 +2523,7 @@ namespace MaterialImpl
 			
 			if (bIsDefaultMaterial)
 			{
-				if (AreShaderErrorsFatal())
-				{
-					UE_ASSET_LOG(LogMaterial, Fatal, This, TEXT("%s"), *ErrorString);
-				}
-				else
-				{
-					UE_ASSET_LOG(LogMaterial, Error, This, TEXT("%s"), *ErrorString);
-				}
+				UE_ASSET_LOG(LogMaterial, Fatal, This, TEXT("%s"), *ErrorString);
 			}
 			else if (CVarMaterialLogErrorOnFailure.GetValueOnAnyThread())
 			{
@@ -2633,32 +2624,6 @@ bool UMaterial::IsComplete() const
 	}
 	return bComplete;
 }
-
-#if WITH_EDITOR
-bool UMaterial::IsCompiling() const
-{
-	bool bIsCompiling = false;
-	if (FApp::CanEverRender())
-	{
-		const EMaterialQualityLevel::Type ActiveQualityLevel = GetCachedScalabilityCVars().MaterialQualityLevel;
-		uint32 FeatureLevelsToCompile = GetFeatureLevelsToCompileForRendering();
-
-		while (FeatureLevelsToCompile != 0)
-		{
-			const ERHIFeatureLevel::Type FeatureLevel = (ERHIFeatureLevel::Type)FBitSet::GetAndClearNextBit(FeatureLevelsToCompile);
-			const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[FeatureLevel];
-
-			FMaterialResource* CurrentResource = FindMaterialResource(MaterialResources, FeatureLevel, ActiveQualityLevel, true);
-			if (CurrentResource && !CurrentResource->IsCompilationFinished())
-			{
-				bIsCompiling = true;
-				break;
-			}
-		}
-	}
-	return bIsCompiling;
-}
-#endif
 
 FGraphEventArray UMaterial::PrecachePSOs(const FPSOPrecacheVertexFactoryDataList& VertexFactoryDataList, const FPSOPrecacheParams& InPreCacheParams, EPSOPrecachePriority Priority, TArray<FMaterialPSOPrecacheRequestID>& OutMaterialPSORequestIDs)
 {
@@ -2773,8 +2738,7 @@ void UMaterial::Serialize(FArchive& Ar)
 		SerializeInlineShaderMaps(
 			NULL,
 			Ar,
-			LoadedMaterialResources,
-			GetFName()
+			LoadedMaterialResources
 #if STORE_ONLY_ACTIVE_SHADERMAPS
 			, &OffsetToFirstResource
 #endif
@@ -2837,8 +2801,13 @@ void UMaterial::Serialize(FArchive& Ar)
 	}
 #endif // #if WITH_EDITOR
 
-	//My-Change-30/05/24
-	static_assert(MP_MAX == 37,/*primitive 35*/ "New material properties must have DoMaterialAttributeReorder called on them to ensure that any future reordering of property pins is correctly applied.");
+//My-Change-SketchPipeline
+	/*primitive
+	static_assert(MP_MAX == 35,
+	*/
+	static_assert(MP_MAX == 37,
+//End-11/06/24
+		"New material properties must have DoMaterialAttributeReorder called on them to ensure that any future reordering of property pins is correctly applied.");
 
 	if (Ar.UEVer() < VER_UE4_MATERIAL_MASKED_BLENDMODE_TIDY)
 	{
@@ -3149,30 +3118,20 @@ void UMaterial::BackwardsCompatibilityDecalConversion()
 #endif // WITH_EDITOR
 }
 
-static void AddSurfaceSubstrateShadingModelFromMaterialShadingModels(FSubstrateMaterialInfo& OutInfo, const FMaterialShadingModelField& InShadingModels)
+static void AddStrataShadingModelFromMaterialShadingModel(FStrataMaterialInfo& OutInfo, const FMaterialShadingModelField& InShadingModels)
 {
-	if (InShadingModels.HasShadingModel(MSM_Unlit))				{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_Unlit); }
-	if (InShadingModels.HasShadingModel(MSM_DefaultLit))		{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_DefaultLit); }
-	if (InShadingModels.HasShadingModel(MSM_Subsurface))		{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SubsurfaceWrap); }
-	if (InShadingModels.HasShadingModel(MSM_PreintegratedSkin))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SubsurfaceMFP); }
-	if (InShadingModels.HasShadingModel(MSM_ClearCoat))			{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_ClearCoat); }
-	if (InShadingModels.HasShadingModel(MSM_SubsurfaceProfile))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SubsurfaceProfile); }
-	if (InShadingModels.HasShadingModel(MSM_TwoSidedFoliage))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SubsurfaceThinTwoSided); }
-	if (InShadingModels.HasShadingModel(MSM_Hair))				{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_Hair); }
-	if (InShadingModels.HasShadingModel(MSM_Cloth))				{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_Cloth); }
-	if (InShadingModels.HasShadingModel(MSM_Eye))				{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_Eye); }
-	if (InShadingModels.HasShadingModel(MSM_SingleLayerWater))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SingleLayerWater); }
-	if (InShadingModels.HasShadingModel(MSM_ThinTranslucent))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_ThinTranslucent); }
-}
-
-static void AddSurfaceSubstrateShadingModelFromMaterialShadingModel(FSubstrateMaterialInfo& OutInfo, const EMaterialShadingModel& InShadingModel)
-{
-	if (InShadingModel < MSM_NUM)
-	{
-		FMaterialShadingModelField ShadingModel;
-		ShadingModel.AddShadingModel(InShadingModel);
-		AddSurfaceSubstrateShadingModelFromMaterialShadingModels(OutInfo, ShadingModel);
-	}
+	if (InShadingModels.HasShadingModel(MSM_Unlit))				{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_Unlit); }
+	if (InShadingModels.HasShadingModel(MSM_DefaultLit))		{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_DefaultLit); }
+	if (InShadingModels.HasShadingModel(MSM_Subsurface))		{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_SubsurfaceLit); }
+	if (InShadingModels.HasShadingModel(MSM_PreintegratedSkin))	{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_SubsurfaceLit); }
+	if (InShadingModels.HasShadingModel(MSM_ClearCoat))			{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_ClearCoat); }
+	if (InShadingModels.HasShadingModel(MSM_SubsurfaceProfile))	{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_SubsurfaceLit); }
+	if (InShadingModels.HasShadingModel(MSM_TwoSidedFoliage))	{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_SubsurfaceLit); }
+	if (InShadingModels.HasShadingModel(MSM_Hair))				{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_Hair); }
+	if (InShadingModels.HasShadingModel(MSM_Cloth))				{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_Cloth); }
+	if (InShadingModels.HasShadingModel(MSM_Eye))				{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_Eye); }
+	if (InShadingModels.HasShadingModel(MSM_SingleLayerWater))	{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_SingleLayerWater); }
+	if (InShadingModels.HasShadingModel(MSM_ThinTranslucent))	{ OutInfo.AddShadingModel(EStrataShadingModel::SSM_DefaultLit); }
 }
 
 EBlendMode ConvertLegacyBlendMode(EBlendMode InBlendMode, FMaterialShadingModelField InShadingModels)
@@ -3188,29 +3147,10 @@ EBlendMode ConvertLegacyBlendMode(EBlendMode InBlendMode, FMaterialShadingModelF
 	return InBlendMode;
 }
 
-#define SUBSTRATE_MOVE_CONNECTION 0
-#define SUBSTRATE_COPY_CONNECTION 1
-
-void UMaterial::ConvertMaterialToSubstrateMaterial()
+void UMaterial::ConvertMaterialToStrataMaterial()
 {
-	/*
-	* The data flow for legacy material conversion node that can be used in isolation is as such:
-	*
-	* --- Conversion time - UMaterial::ConvertMaterialToSubstrateMaterial()
-	*     Shading model => legacy node setup (shading model from expression? relink input : otherwise set the shading model on the conversion node itself)
-	*
-	* --- GatherSubstrateMaterialInfo
-	*     Send back what is the shading model used, or if it is "from expression"
-	*
-	* --- UMaterial::RebuildShadingModelField()
-	*     Set material Domain, ShadingModel and ShadingModels according to the returned value from GatherSubstrateMaterialInfo gathered from the graph.
-	*     Those values are not authorable but do enable shading models via defines from the HLSLTranslator. Seeing them being correct also helps to understand and debug.
-	*
-	* --- Material instance shading model override
-	*     Overridden from the HLSLTranslator when detected by comparing base and instanced materials.
-	*/
 #if WITH_EDITOR
-	if (!Substrate::IsSubstrateEnabled())
+	if (!Strata::IsStrataEnabled())
 	{
 		return;
 	}
@@ -3231,80 +3171,19 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 		CurrentNodePosX = FMath::Max(NodeToReplace->MaterialExpressionEditorX + TranslationOffsetX, CurrentNodePosX);
 	};
 
-
-	// for ExpressionInput
-	auto ConnectionTo = [](auto& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex, uint32 OperationType = SUBSTRATE_MOVE_CONNECTION)
+	auto MoveConnectionTo = [](auto& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex)
 	{
 		if (OldNodeInput.IsConnected())
 		{
 			NewNode->GetInput(NewInputIndex)->Connect(OldNodeInput.OutputIndex, OldNodeInput.Expression);
-			if (OperationType == SUBSTRATE_MOVE_CONNECTION)
-			{
-				OldNodeInput.Expression = nullptr;
-			}
+			OldNodeInput.Expression = nullptr;
 		}
 	};
-
-	// For material input
-	auto ScalarMatInputConnectionTo = [&](FScalarMaterialInput& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex, EMaterialProperty Property, uint32 OperationType = SUBSTRATE_MOVE_CONNECTION)
+	auto CopyConnectionTo = [](auto& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex)
 	{
-		FVector4f DefaultPinValue = FMaterialAttributeDefinitionMap::GetDefaultValue(Property);
-
 		if (OldNodeInput.IsConnected())
 		{
-			ConnectionTo(OldNodeInput, NewNode, NewInputIndex, OperationType);
-		}
-		else if (OldNodeInput.UseConstant && DefaultPinValue.X != OldNodeInput.Constant)
-		{
-			UMaterialExpressionConstant* ExpressionConstantScalar = NewObject<UMaterialExpressionConstant>(this);
-			ExpressionConstantScalar->R = OldNodeInput.Constant;
-			NewNode->GetInput(NewInputIndex)->Connect(0, ExpressionConstantScalar);
-			if (OperationType == SUBSTRATE_MOVE_CONNECTION)
-			{
-				OldNodeInput.Expression = nullptr;
-			}
-		}
-	};
-	auto ColorMatInputConnectionTo = [&](FColorMaterialInput& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex, EMaterialProperty Property, uint32 OperationType = SUBSTRATE_MOVE_CONNECTION)
-	{
-		FVector4f DefaultPinValue = FMaterialAttributeDefinitionMap::GetDefaultValue(Property);
-		FLinearColor DefaultPinLinearColor = FLinearColor(DefaultPinValue.X, DefaultPinValue.Y, DefaultPinValue.Z);
-		FLinearColor CurrentPinLinearColor = OldNodeInput.Constant.ReinterpretAsLinear();
-
-		if (OldNodeInput.IsConnected())
-		{
-			ConnectionTo(OldNodeInput, NewNode, NewInputIndex, OperationType);
-		}
-		else if (OldNodeInput.UseConstant && DefaultPinLinearColor != CurrentPinLinearColor)
-		{
-			UMaterialExpressionConstant3Vector* ExpressionConstantScalar = NewObject<UMaterialExpressionConstant3Vector>(this);
-			ExpressionConstantScalar->Constant = CurrentPinLinearColor;
-			NewNode->GetInput(NewInputIndex)->Connect(0, ExpressionConstantScalar);
-			if (OperationType == SUBSTRATE_MOVE_CONNECTION)
-			{
-				OldNodeInput.Expression = nullptr;
-			}
-		}
-	};
-	auto Vector3MatInputConnectionTo = [&](FVectorMaterialInput& OldNodeInput, UMaterialExpression* NewNode, uint32 NewInputIndex, EMaterialProperty Property, uint32 OperationType = SUBSTRATE_MOVE_CONNECTION)
-	{
-		FVector4f DefaultPinValue = FMaterialAttributeDefinitionMap::GetDefaultValue(Property);
-		FVector3f DefaultPinVec3f = FVector3f(DefaultPinValue.X, DefaultPinValue.Y, DefaultPinValue.Z);
-		FVector3f CurrentPinVec3f = FVector3f(OldNodeInput.Constant.X, OldNodeInput.Constant.Y, OldNodeInput.Constant.Z);
-
-		if (OldNodeInput.IsConnected())
-		{
-			ConnectionTo(OldNodeInput, NewNode, NewInputIndex, OperationType);
-		}
-		else if (OldNodeInput.UseConstant && DefaultPinVec3f != CurrentPinVec3f)
-		{
-			UMaterialExpressionConstant3Vector* ExpressionConstantScalar = NewObject<UMaterialExpressionConstant3Vector>(this);
-			ExpressionConstantScalar->Constant = CurrentPinVec3f;
-			NewNode->GetInput(NewInputIndex)->Connect(0, ExpressionConstantScalar);
-			if (OperationType == SUBSTRATE_MOVE_CONNECTION)
-			{
-				OldNodeInput.Expression = nullptr;
-			}
+			NewNode->GetInput(NewInputIndex)->Connect(OldNodeInput.OutputIndex, OldNodeInput.Expression);
 		}
 	};
 
@@ -3363,62 +3242,111 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 
 	bool bInvalidateShader = false;
 	bool bRelinkCustomOutputNodes = false;
-	UMaterialExpressionSubstrateShadingModels* ConvertNode = nullptr;
+	UMaterialExpressionStrataLegacyConversion* ConvertNode = nullptr;
 	// Connect all the legacy pin into the conversion node
-	if (bUseMaterialAttributes && EditorOnly->MaterialAttributes.Expression && !EditorOnly->FrontMaterial.IsConnected() && !EditorOnly->MaterialAttributes.Expression->IsResultSubstrateMaterial(EditorOnly->MaterialAttributes.OutputIndex)) // M_Rifle cause issues there
+	if (bUseMaterialAttributes && EditorOnly->MaterialAttributes.Expression && !EditorOnly->MaterialAttributes.Expression->IsResultStrataMaterial(EditorOnly->MaterialAttributes.OutputIndex)) // M_Rifle cause issues there
 	{
-		UMaterialExpressionSubstrateConvertMaterialAttributes* ConvertAttributeNode = NewObject<UMaterialExpressionSubstrateConvertMaterialAttributes>(this);
-		ConvertAttributeNode->Material = this;
-		SetPosXAndMoveReferenceToTheRight(ConvertAttributeNode);
-		ConvertAttributeNode->SubsurfaceProfile = bRequireNoSubsurfaceProfile ? nullptr : SubsurfaceProfile;
+		UMaterialExpressionBreakMaterialAttributes* BreakMatAtt = NewObject<UMaterialExpressionBreakMaterialAttributes>(this);
+		SetPosXAndMoveReferenceToTheRight(BreakMatAtt);
+		MoveConnectionTo(EditorOnly->MaterialAttributes, BreakMatAtt, 0);
 
-		// * Copy the material attribute connection to the conversion node.
-		// * Leave the material attribute existing connection plugged to the root node, 
-		//   so that other input (PixelDepthOffset, WorldPositionOffset, ...) get pull 
-		//   from the material attributes node
-		ConnectionTo(EditorOnly->MaterialAttributes, ConvertAttributeNode, 0, SUBSTRATE_COPY_CONNECTION);
-
-		// Reconnect custom output to material attribute conversion node
+		// Check if Anisotropy input is actually used/connected
+		// This is needed/important as if anisotropy is connected a converted material becomes 'complex' instead of 'single'. 
+		// Since this path uses material attributes, there is no direct way to evaluate if anisotropy is connected or not. To find this,
+		// we loop over all the material attribute make/set nodes to figure out if the anisotropy value is ever set.
+		bool bIsAnisotropyConnected = false;
 		{
-			check(ConvertAttributeNode);
-			GatherCustomNodes();
+			// Gather 'make' attributes nodes
+			{
+				TArray<UMaterialExpressionMakeMaterialAttributes*> MakeAttributeExpressions;
+				GetAllExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionMakeMaterialAttributes>(MakeAttributeExpressions);
+				for (UMaterialExpressionMakeMaterialAttributes* Expression : MakeAttributeExpressions)
+				{
+					bIsAnisotropyConnected = Expression->GetExpressionInput(MP_Anisotropy) != nullptr;
+					if (bIsAnisotropyConnected)
+					{
+						break;
+					}
+				}
+			}
 
-			if (ThinTranslucentOutput)
+			// Gather 'set' attributes nodes
+			if (!bIsAnisotropyConnected)
 			{
-				ConnectionTo(*ThinTranslucentOutput->GetInput(0), ConvertAttributeNode, 1);	 // TransmittanceColor
-			}
-			if (SingleLayerWaterOutput)
-			{
-				ConnectionTo(*SingleLayerWaterOutput->GetInput(0), ConvertAttributeNode, 2); // WaterScatteringCoefficients
-				ConnectionTo(*SingleLayerWaterOutput->GetInput(1), ConvertAttributeNode, 3); // WaterAbsorptionCoefficients
-				ConnectionTo(*SingleLayerWaterOutput->GetInput(2), ConvertAttributeNode, 4); // WaterPhaseG
-				ConnectionTo(*SingleLayerWaterOutput->GetInput(3), ConvertAttributeNode, 5); // ColorScaleBehindWater
-			}
-			if (ClearCoatBottomNormalOutput)
-			{
-				ConnectionTo(*ClearCoatBottomNormalOutput->GetInput(0), ConvertAttributeNode, 6, SUBSTRATE_COPY_CONNECTION); // ClearCoatNormal
-			}
-			if (TangentOutput)
-			{
-				ConnectionTo(*TangentOutput->GetInput(0), ConvertAttributeNode, 7, SUBSTRATE_COPY_CONNECTION);	// TangentOutput
+				const FGuid AnisotropyGuid = FMaterialAttributeDefinitionMap::GetID(MP_Anisotropy);
+				TArray<UMaterialExpressionSetMaterialAttributes*> SetAttributeExpressions;
+				GetAllExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionSetMaterialAttributes>(SetAttributeExpressions);
+				for (UMaterialExpressionSetMaterialAttributes* Expression : SetAttributeExpressions)
+				{
+					for (const FGuid& AttributeGuid : Expression->AttributeSetTypes)
+					{
+						if (AttributeGuid == AnisotropyGuid)
+						{
+							bIsAnisotropyConnected = true;
+							break;
+						}
+					}
+					if (bIsAnisotropyConnected)
+					{
+						break;
+					}
+				}
 			}
 		}
 
-		// Connect converted Substrate data to root node
-		EditorOnly->FrontMaterial.Connect(0, ConvertAttributeNode);
+		ConvertNode = NewObject<UMaterialExpressionStrataLegacyConversion>(this);
+		SetPosXAndMoveReferenceToTheRight(ConvertNode);
+		ConvertNode->BaseColor.Connect(0, BreakMatAtt);
+		ConvertNode->Metallic.Connect(1, BreakMatAtt);
+		ConvertNode->Specular.Connect(2, BreakMatAtt);
+		ConvertNode->Roughness.Connect(3, BreakMatAtt);
+		if (bIsAnisotropyConnected)
+		{
+		ConvertNode->Anisotropy.Connect(4, BreakMatAtt);
+		}
+		ConvertNode->EmissiveColor.Connect(5, BreakMatAtt);
+		ConvertNode->Normal.Connect(8, BreakMatAtt);
+		ConvertNode->Tangent.Connect(9, BreakMatAtt);
+		ConvertNode->SubSurfaceColor.Connect(11, BreakMatAtt);
+		ConvertNode->ClearCoat.Connect(12, BreakMatAtt);
+		ConvertNode->ClearCoatRoughness.Connect(13, BreakMatAtt);
+		ConvertNode->Opacity.Connect(6, BreakMatAtt);
+		ConvertNode->ShadingModel.Connect(25, BreakMatAtt);
+		ConvertNode->SubsurfaceProfile = bRequireNoSubsurfaceProfile ? nullptr : SubsurfaceProfile;
+		bRelinkCustomOutputNodes = true;
 
-		// Shading Model
-		// * either use the shader graph expression 
-		// * or add a constant shading model
+		// * Remove support for material attribute
+		// * explicitly connect the Strata node to the root node
+		// * Forward inputs to the root node (Do not reconnect the Opacity as we handle the opacity by internally within the conversion node)
+		// * Always forward masked opacity because this is required when the blend mode is overriden to masked on a material instance.
+		bUseMaterialAttributes = false;
+		EditorOnly->FrontMaterial.Connect(0, ConvertNode);
+		EditorOnly->Opacity.Connect(6, BreakMatAtt);			// For alpha composite blend mode, Opacity on the root node in case BLEND_AlphaComposite is selected.
+		EditorOnly->OpacityMask.Connect(7, BreakMatAtt);
+		EditorOnly->WorldPositionOffset.Connect(10, BreakMatAtt);
+		EditorOnly->AmbientOcclusion.Connect(14, BreakMatAtt);
+		EditorOnly->PixelDepthOffset.Connect(24, BreakMatAtt);
+		EditorOnly->Refraction.Connect(15, BreakMatAtt);
+
 		if (ShadingModel == MSM_FromMaterialExpression)
 		{
-			ConvertAttributeNode->ShadingModelOverride = MSM_FromMaterialExpression;
+			ConvertNode->ConvertedStrataMaterialInfo.SetShadingModelFromExpression(true);
+			AddStrataShadingModelFromMaterialShadingModel(ConvertNode->ConvertedStrataMaterialInfo, ShadingModels);
+			check(ConvertNode->ConvertedStrataMaterialInfo.CountShadingModels() >= 1);
 		}
 		else
 		{
-			// Store Substrate shading model of the converted material. 
-			check(ShadingModels.CountShadingModels() == 1);
-			ConvertAttributeNode->ShadingModelOverride = ShadingModel;
+			check(!bHasShadingModelMixture);
+
+			// Add shading model node
+			UMaterialExpressionShadingModel* ShadingModelNode = NewObject<UMaterialExpressionShadingModel>(this);
+			ReplaceNodeAndMoveToTheRight(ConvertNode, ShadingModelNode);
+			ShadingModelNode->ShadingModel = ShadingModel;
+			ConvertNode->ShadingModel.Connect(0, ShadingModelNode);
+
+			// Store strata shading model of the converted material. 
+			AddStrataShadingModelFromMaterialShadingModel(ConvertNode->ConvertedStrataMaterialInfo, ShadingModels);
+			check(ConvertNode->ConvertedStrataMaterialInfo.CountShadingModels() == 1);
 		}
 
 		if (MaterialDomain == MD_DeferredDecal)
@@ -3427,10 +3355,9 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			// control on this, but only DefaultLit should be supported.
 
 			// Now pass through the convert to decal node, which flag the material as SSM_Decal, which will set the domain to Decal.
-			UMaterialExpressionSubstrateConvertToDecal* ConvertToDecalNode = NewObject<UMaterialExpressionSubstrateConvertToDecal>(this);
-			ConvertAttributeNode->Material = this;
-			ReplaceNodeAndMoveToTheRight(ConvertAttributeNode, ConvertToDecalNode);
-			ConvertToDecalNode->DecalMaterial.Connect(0, ConvertAttributeNode);
+			UMaterialExpressionStrataConvertToDecal* ConvertToDecalNode = NewObject<UMaterialExpressionStrataConvertToDecal>(this);
+			ReplaceNodeAndMoveToTheRight(ConvertNode, ConvertToDecalNode);
+			ConvertToDecalNode->DecalMaterial.Connect(0, ConvertNode);
 
 			EditorOnly->FrontMaterial.Connect(0, ConvertToDecalNode);
 		}
@@ -3442,7 +3369,7 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 	else if (!bUseMaterialAttributes && !EditorOnly->FrontMaterial.IsConnected() && GetExpressions().IsEmpty())
 	{
 		// Empty material: Create by default a slab node
-		UMaterialFunction* DefaultMF = LoadObject<UMaterialFunction>(nullptr, TEXT("/Engine/Functions/Substrate/SMF_UE4Disney.SMF_UE4Disney"));
+		UMaterialFunction* DefaultMF = LoadObject<UMaterialFunction>(nullptr, TEXT("/Engine/Functions/Strata/SMF_UE4Disney.SMF_UE4Disney"));
 		if (DefaultMF)
 		{
 			DefaultMF->UpdateFromFunctionResource();
@@ -3461,21 +3388,12 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 				MFCallNode->UpdateFromFunctionResource();
 				MFCallNode->PostEditChange();
 				MFCallNode->ConditionalPostLoad();
-
-				ColorMatInputConnectionTo(EditorOnly->BaseColor,		MFCallNode, 0, MP_BaseColor);
-				ScalarMatInputConnectionTo(EditorOnly->Metallic,		MFCallNode, 1, MP_Metallic);
-				ScalarMatInputConnectionTo(EditorOnly->Specular,		MFCallNode, 2, MP_Specular);
-				ScalarMatInputConnectionTo(EditorOnly->Roughness,		MFCallNode, 3, MP_Roughness);
-				Vector3MatInputConnectionTo(EditorOnly->Normal,			MFCallNode, 4, MP_Normal);
-				ColorMatInputConnectionTo(EditorOnly->EmissiveColor,	MFCallNode, 5, MP_EmissiveColor);
-				ScalarMatInputConnectionTo(EditorOnly->Opacity,			MFCallNode, 6, MP_Opacity);
 			}
 		}
 		else
 		{
 			// Or if it cannot be found, a slab node
-			UMaterialExpressionSubstrateSlabBSDF* SlabNode = NewObject<UMaterialExpressionSubstrateSlabBSDF>(this);
-			SlabNode->Material = this;
+			UMaterialExpressionStrataSlabBSDF* SlabNode = NewObject<UMaterialExpressionStrataSlabBSDF>(this);
 			SetPosXAndMoveReferenceToTheRight(SlabNode);
 			EditorOnly->FrontMaterial.Connect(0, SlabNode);
 		}
@@ -3495,34 +3413,32 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 					// For this special case, using two slabs to create a clear coat material with separated top and bottom normal. 
 
 					// Create metalness to Slab parameterisation conveersion node
-					UMaterialExpressionSubstrateMetalnessToDiffuseAlbedoF0* SubstrateMetalnessToDiffuseAlbedoF0 = NewObject<UMaterialExpressionSubstrateMetalnessToDiffuseAlbedoF0>(this);
-					SetPosXAndMoveReferenceToTheRight(SubstrateMetalnessToDiffuseAlbedoF0);
-					ColorMatInputConnectionTo(EditorOnly->BaseColor, SubstrateMetalnessToDiffuseAlbedoF0, 0, MP_BaseColor);
-					ScalarMatInputConnectionTo(EditorOnly->Metallic, SubstrateMetalnessToDiffuseAlbedoF0, 1, MP_Metallic);
-					ScalarMatInputConnectionTo(EditorOnly->Specular, SubstrateMetalnessToDiffuseAlbedoF0, 2, MP_Specular);
+					UMaterialExpressionStrataMetalnessToDiffuseAlbedoF0* StrataMetalnessToDiffuseAlbedoF0 = NewObject<UMaterialExpressionStrataMetalnessToDiffuseAlbedoF0>(this);
+					SetPosXAndMoveReferenceToTheRight(StrataMetalnessToDiffuseAlbedoF0);
+					MoveConnectionTo(EditorOnly->BaseColor, StrataMetalnessToDiffuseAlbedoF0, 0);					// BaseColor
+					MoveConnectionTo(EditorOnly->Metallic, StrataMetalnessToDiffuseAlbedoF0, 1);					// Metallic
+					MoveConnectionTo(EditorOnly->Specular, StrataMetalnessToDiffuseAlbedoF0, 2);					// Specular
 					
 					// Top slab BSDF as a simple Disney material
-					UMaterialExpressionSubstrateSlabBSDF* BottomSlabBSDF = NewObject<UMaterialExpressionSubstrateSlabBSDF>(this);
-					BottomSlabBSDF->Material = this;
+					UMaterialExpressionStrataSlabBSDF* BottomSlabBSDF = NewObject<UMaterialExpressionStrataSlabBSDF>(this);
 					SetPosXAndMoveReferenceToTheRight(BottomSlabBSDF);
-					BottomSlabBSDF->GetInput(0)->Connect(0, SubstrateMetalnessToDiffuseAlbedoF0);
-					BottomSlabBSDF->GetInput(1)->Connect(1, SubstrateMetalnessToDiffuseAlbedoF0);
-					BottomSlabBSDF->GetInput(2)->Connect(2, SubstrateMetalnessToDiffuseAlbedoF0);
-					ScalarMatInputConnectionTo(EditorOnly->Roughness, BottomSlabBSDF, 3, MP_Roughness);
-					ScalarMatInputConnectionTo(EditorOnly->Anisotropy, BottomSlabBSDF, 4, MP_Anisotropy, SUBSTRATE_COPY_CONNECTION);
-					Vector3MatInputConnectionTo(EditorOnly->Tangent, BottomSlabBSDF, 6, MP_Tangent);
+					BottomSlabBSDF->GetInput(0)->Connect(0, StrataMetalnessToDiffuseAlbedoF0);
+					BottomSlabBSDF->GetInput(1)->Connect(1, StrataMetalnessToDiffuseAlbedoF0);
+					BottomSlabBSDF->GetInput(2)->Connect(2, StrataMetalnessToDiffuseAlbedoF0);
+					MoveConnectionTo(EditorOnly->Roughness, BottomSlabBSDF, 3);					// Roughness
+					CopyConnectionTo(EditorOnly->Anisotropy, BottomSlabBSDF, 4);				// Anisotropy
+					MoveConnectionTo(EditorOnly->Tangent, BottomSlabBSDF, 6);					// Tangent
 
 					check(ClearCoatBottomNormalOutput);
-					ConnectionTo(*ClearCoatBottomNormalOutput->GetInput(0), BottomSlabBSDF, 5, SUBSTRATE_COPY_CONNECTION);// ClearColorBottomNormal -> BottomSlabBSDF.Normal
+					CopyConnectionTo(*ClearCoatBottomNormalOutput->GetInput(0), BottomSlabBSDF, 5);// ClearColorBottomNormal -> BottomSlabBSDF.Normal
 
 					// Now weight the top base material by opacity.
-					UMaterialExpressionSubstrateSlabBSDF* TopSlabBSDF = NewObject<UMaterialExpressionSubstrateSlabBSDF>(this);
-					TopSlabBSDF->Material = this;
+					UMaterialExpressionStrataSlabBSDF* TopSlabBSDF = NewObject<UMaterialExpressionStrataSlabBSDF>(this);
 					TopSlabBSDF->MaterialExpressionEditorX = BottomSlabBSDF->MaterialExpressionEditorX;
 					TopSlabBSDF->MaterialExpressionEditorY = BottomSlabBSDF->MaterialExpressionEditorY + 650;
-					ColorMatInputConnectionTo(EditorOnly->EmissiveColor, TopSlabBSDF, 10, MP_EmissiveColor);
-					ScalarMatInputConnectionTo(EditorOnly->ClearCoatRoughness, TopSlabBSDF, 3, MP_CustomData0);	// ClearCoatRoughness => Roughness
-					Vector3MatInputConnectionTo(EditorOnly->Normal, TopSlabBSDF, 5, MP_Normal);
+					MoveConnectionTo(EditorOnly->EmissiveColor, TopSlabBSDF, 10);				// Emissive
+					MoveConnectionTo(EditorOnly->ClearCoatRoughness, TopSlabBSDF, 3);			// ClearCoatRoughness => Roughness
+					MoveConnectionTo(EditorOnly->Normal, TopSlabBSDF, 5);						// Normal
 
 					//  The top layer has a hard coded specular value of 0.5 (F0 = 0.04)
 					UMaterialExpressionConstant* ConstantHalf = NewObject<UMaterialExpressionConstant>(this);
@@ -3542,20 +3458,19 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 					UMaterialExpressionConstant* Constant075 = NewObject<UMaterialExpressionConstant>(this);
 					ReplaceNodeAndMoveToTheRight(TopSlabBSDF, Constant075);
 					Constant075->R = 0.75f;
-					UMaterialExpressionSubstrateTransmittanceToMFP* TransToMDFP = NewObject<UMaterialExpressionSubstrateTransmittanceToMFP>(this);
+					UMaterialExpressionStrataTransmittanceToMFP* TransToMDFP = NewObject<UMaterialExpressionStrataTransmittanceToMFP>(this);
 					ReplaceNodeAndMoveToTheRight(TopSlabBSDF, TransToMDFP);
 					TransToMDFP->GetInput(0)->Connect(0, Constant075);
 					TopSlabBSDF->GetInput(7)->Connect(0, TransToMDFP);							// MFP -> MFP
 					TopSlabBSDF->GetInput(13)->Connect(1, TransToMDFP);							// Thickness -> Thickness
 
 					// Now weight the top base material by ClearCoat
-					UMaterialExpressionSubstrateWeight* TopSlabBSDFWithCoverage = NewObject<UMaterialExpressionSubstrateWeight>(this);
+					UMaterialExpressionStrataWeight* TopSlabBSDFWithCoverage = NewObject<UMaterialExpressionStrataWeight>(this);
 					SetPosXAndMoveReferenceToTheRight(TopSlabBSDFWithCoverage);
-					TopSlabBSDFWithCoverage->GetInput(0)->Connect(0, TopSlabBSDF);												// TopSlabBSDF -> A
-					ScalarMatInputConnectionTo(EditorOnly->ClearCoat, TopSlabBSDFWithCoverage, 1, MP_CustomData0);				// ClearCoat -> Weight
-					ScalarMatInputConnectionTo(EditorOnly->ClearCoatRoughness, TopSlabBSDFWithCoverage, 1, MP_CustomData1);		// ClearCoat -> Weight
+					TopSlabBSDFWithCoverage->GetInput(0)->Connect(0, TopSlabBSDF);				// TopSlabBSDF -> A
+					MoveConnectionTo(EditorOnly->ClearCoat, TopSlabBSDFWithCoverage, 1);		// ClearCoat -> Weight
 
-					UMaterialExpressionSubstrateVerticalLayering* VerticalLayering = NewObject<UMaterialExpressionSubstrateVerticalLayering>(this);
+					UMaterialExpressionStrataVerticalLayering* VerticalLayering = NewObject<UMaterialExpressionStrataVerticalLayering>(this);
 					SetPosXAndMoveReferenceToTheRight(VerticalLayering);
 					VerticalLayering->GetInput(0)->Connect(0, TopSlabBSDFWithCoverage);			// Top -> Top
 					VerticalLayering->GetInput(1)->Connect(0, BottomSlabBSDF);					// Bottom -> Base
@@ -3568,32 +3483,37 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			
 			if (!bClearCoatConversionDone)
 			{
-				ConvertNode = NewObject<UMaterialExpressionSubstrateShadingModels>(this);
-				ConvertNode->Material = this;
+				ConvertNode = NewObject<UMaterialExpressionStrataLegacyConversion>(this);
 				SetPosXAndMoveReferenceToTheRight(ConvertNode);
 				ConvertNode->SubsurfaceProfile = bRequireNoSubsurfaceProfile ? nullptr : SubsurfaceProfile;
-				ColorMatInputConnectionTo(EditorOnly->BaseColor, ConvertNode, 0, MP_BaseColor);
-				ScalarMatInputConnectionTo(EditorOnly->Metallic, ConvertNode, 1, MP_Metallic);
-				ScalarMatInputConnectionTo(EditorOnly->Specular, ConvertNode, 2, MP_Specular);
-				ScalarMatInputConnectionTo(EditorOnly->Roughness, ConvertNode, 3, MP_Roughness);
-				ScalarMatInputConnectionTo(EditorOnly->Anisotropy, ConvertNode, 4, MP_Anisotropy);
-				ColorMatInputConnectionTo(EditorOnly->EmissiveColor, ConvertNode, 5, MP_EmissiveColor);
-				Vector3MatInputConnectionTo(EditorOnly->Normal, ConvertNode, 6, MP_Normal, SUBSTRATE_COPY_CONNECTION);
-				Vector3MatInputConnectionTo(EditorOnly->Tangent, ConvertNode, 7, MP_Tangent);
-				ColorMatInputConnectionTo(EditorOnly->SubsurfaceColor, ConvertNode, 8, MP_SubsurfaceColor);
-				ScalarMatInputConnectionTo(EditorOnly->ClearCoat, ConvertNode, 9, MP_CustomData0);
-				ScalarMatInputConnectionTo(EditorOnly->ClearCoatRoughness, ConvertNode, 10, MP_CustomData1);
-				ScalarMatInputConnectionTo(EditorOnly->Opacity, ConvertNode, 11, MP_Opacity, SUBSTRATE_COPY_CONNECTION);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
+				MoveConnectionTo(EditorOnly->BaseColor, ConvertNode, 0);
+				MoveConnectionTo(EditorOnly->Metallic, ConvertNode, 1);
+				MoveConnectionTo(EditorOnly->Specular, ConvertNode, 2);
+				MoveConnectionTo(EditorOnly->Roughness, ConvertNode, 3);
+				MoveConnectionTo(EditorOnly->Anisotropy, ConvertNode, 4);
+				MoveConnectionTo(EditorOnly->EmissiveColor, ConvertNode, 5);
+				CopyConnectionTo(EditorOnly->Normal, ConvertNode, 6);
+				MoveConnectionTo(EditorOnly->Tangent, ConvertNode, 7);
+				MoveConnectionTo(EditorOnly->SubsurfaceColor, ConvertNode, 8);
+				MoveConnectionTo(EditorOnly->ClearCoat, ConvertNode, 9);
+				MoveConnectionTo(EditorOnly->ClearCoatRoughness, ConvertNode, 10);
+				CopyConnectionTo(EditorOnly->Opacity, ConvertNode, 11);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
 				bRelinkCustomOutputNodes = true;
 			
 				// Shading Model
 				// * either use the shader graph expression 
 				// * or add a constant shading model
+				// 
+				// Note: store this conversion type(s) into ConvertedStrataMaterialInfo for having more context when 
+				// rebuilding the final Shading model (see RebuildShadingModelField())
 				if (ShadingModel == MSM_FromMaterialExpression)
 				{
 					if (!EditorOnly->ShadingModelFromMaterialExpression.IsConnected())
 					{
-						ConvertNode->ShadingModelOverride = MSM_DefaultLit;
+						UMaterialExpressionShadingModel* ShadingModelNode = NewObject<UMaterialExpressionShadingModel>(this);
+						ReplaceNodeAndMoveToTheRight(ConvertNode, ShadingModelNode);
+						ShadingModelNode->ShadingModel = MSM_DefaultLit;
+						ConvertNode->ShadingModel.Connect(0, ShadingModelNode);
 					}
 					else
 					{
@@ -3602,19 +3522,28 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 						ConvertNode->ShadingModel.Connect(EditorOnly->ShadingModelFromMaterialExpression.OutputIndex, EditorOnly->ShadingModelFromMaterialExpression.Expression);
 					}
 
-					// Store Substrate shading model of the converted material. 
+					// Store strata shading model of the converted material. 
 					GatherCustomNodes();
 					if (SingleLayerWaterOutput)
 					{
-						ShadingModels.AddShadingModel(MSM_SingleLayerWater);
+						ConvertNode->ConvertedStrataMaterialInfo.AddShadingModel(SSM_SingleLayerWater);
 					}
 
-					check(ShadingModels.CountShadingModels() >= 1);
+					ConvertNode->ConvertedStrataMaterialInfo.SetShadingModelFromExpression(true);
+					AddStrataShadingModelFromMaterialShadingModel(ConvertNode->ConvertedStrataMaterialInfo, ShadingModels);
+					check(ConvertNode->ConvertedStrataMaterialInfo.CountShadingModels() >= 1);
 				}
 				else
 				{
-					ConvertNode->ShadingModelOverride = ShadingModel;
-					check(ShadingModels.CountShadingModels() == 1);
+					check(!bHasShadingModelMixture);
+
+					UMaterialExpressionShadingModel* ShadingModelNode = NewObject<UMaterialExpressionShadingModel>(this);
+					ReplaceNodeAndMoveToTheRight(ConvertNode, ShadingModelNode);
+					ShadingModelNode->ShadingModel = ShadingModel;
+					ConvertNode->ShadingModel.Connect(0, ShadingModelNode);
+
+					AddStrataShadingModelFromMaterialShadingModel(ConvertNode->ConvertedStrataMaterialInfo, ShadingModels);
+					check(ConvertNode->ConvertedStrataMaterialInfo.CountShadingModels() == 1);
 				}
 
 				EditorOnly->FrontMaterial.Connect(0, ConvertNode);
@@ -3624,15 +3553,14 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 		}
 		else if (MaterialDomain == MD_Volume)
 		{
-			UMaterialExpressionSubstrateVolumetricFogCloudBSDF* VolBSDF = NewObject<UMaterialExpressionSubstrateVolumetricFogCloudBSDF>(this);
-			VolBSDF->Material = this;
+			UMaterialExpressionStrataVolumetricFogCloudBSDF* VolBSDF = NewObject<UMaterialExpressionStrataVolumetricFogCloudBSDF>(this);
 			SetPosXAndMoveReferenceToTheRight(VolBSDF);
-			ColorMatInputConnectionTo(EditorOnly->BaseColor, VolBSDF, 0, MP_BaseColor);	
-			ColorMatInputConnectionTo(EditorOnly->SubsurfaceColor, VolBSDF, 1, MP_SubsurfaceColor);
-			ColorMatInputConnectionTo(EditorOnly->EmissiveColor, VolBSDF, 2, MP_EmissiveColor);	
-			ScalarMatInputConnectionTo(EditorOnly->AmbientOcclusion, VolBSDF, 3, MP_AmbientOcclusion);
+			MoveConnectionTo(EditorOnly->BaseColor, VolBSDF, 0);		// Albedo
+			MoveConnectionTo(EditorOnly->SubsurfaceColor, VolBSDF, 1);	// Extinction
+			MoveConnectionTo(EditorOnly->EmissiveColor, VolBSDF, 2);	// EmissiveColor
+			MoveConnectionTo(EditorOnly->AmbientOcclusion, VolBSDF, 3);	// AmbientOcclusion
 
-			// SUBSTRATE_TODO remove the VolumetricAdvancedOutput node and add the input onto FogCloudBSDF even if only used by the cloud renderer?
+			// STRATA_TODO remove the VolumetricAdvancedOutput node and add the input onto FogCloudBSDF even if only used by the cloud renderer?
 			EditorOnly->FrontMaterial.Connect(0, VolBSDF);
 			bInvalidateShader = true;
 		}
@@ -3644,10 +3572,9 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			ShadingModels.AddShadingModel(MSM_Unlit);
 
 			// Only Emissive & Opacity are valid input for PostProcess material
-			UMaterialExpressionSubstrateLightFunction* LightFunctionNode = NewObject<UMaterialExpressionSubstrateLightFunction>(this);
-			LightFunctionNode->Material = this;
+			UMaterialExpressionStrataLightFunction* LightFunctionNode = NewObject<UMaterialExpressionStrataLightFunction>(this);
 			SetPosXAndMoveReferenceToTheRight(LightFunctionNode);
-			ColorMatInputConnectionTo(EditorOnly->EmissiveColor, LightFunctionNode, 0, MP_EmissiveColor);
+			MoveConnectionTo(EditorOnly->EmissiveColor, LightFunctionNode, 0);
 
 			EditorOnly->FrontMaterial.Connect(0, LightFunctionNode);
 			bInvalidateShader = true;
@@ -3659,17 +3586,16 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			ShadingModels.ClearShadingModels();
 			ShadingModels.AddShadingModel(MSM_Unlit);
 
-			if (MaterialDomain == MD_PostProcess && !IsPostProcessMaterialOutputingAlpha())
+			if (MaterialDomain == MD_PostProcess && !BlendableOutputAlpha)
 			{
 				BlendMode = BLEND_Opaque;
 			}
 
-			UMaterialExpressionSubstratePostProcess* PostProcNode = NewObject<UMaterialExpressionSubstratePostProcess>(this);
-			PostProcNode->Material = this;
+			UMaterialExpressionStrataPostProcess* PostProcNode = NewObject<UMaterialExpressionStrataPostProcess>(this);
 			SetPosXAndMoveReferenceToTheRight(PostProcNode);
 
-			ColorMatInputConnectionTo(EditorOnly->EmissiveColor, PostProcNode, 0, MP_EmissiveColor);
-			ScalarMatInputConnectionTo(EditorOnly->Opacity, PostProcNode, 1, MP_Opacity, SUBSTRATE_COPY_CONNECTION);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
+			MoveConnectionTo(EditorOnly->EmissiveColor, PostProcNode, 0);
+			CopyConnectionTo(EditorOnly->Opacity, PostProcNode, 1);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
 
 			EditorOnly->FrontMaterial.Connect(0, PostProcNode);
 			bInvalidateShader = true;
@@ -3681,29 +3607,32 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			ShadingModels.ClearShadingModels();
 			ShadingModels.AddShadingModel(MSM_DefaultLit);
 
-			ConvertNode = NewObject<UMaterialExpressionSubstrateShadingModels>(this);
-			ConvertNode->Material = this;
+			ConvertNode = NewObject<UMaterialExpressionStrataLegacyConversion>(this);
 			SetPosXAndMoveReferenceToTheRight(ConvertNode);
-			ColorMatInputConnectionTo(EditorOnly->BaseColor, ConvertNode, 0, MP_BaseColor);
-			ScalarMatInputConnectionTo(EditorOnly->Metallic, ConvertNode, 1, MP_Metallic);
-			ScalarMatInputConnectionTo(EditorOnly->Specular, ConvertNode, 2, MP_Specular);
-			ScalarMatInputConnectionTo(EditorOnly->Roughness, ConvertNode, 3, MP_Roughness);
-			ScalarMatInputConnectionTo(EditorOnly->Anisotropy, ConvertNode, 4, MP_Anisotropy);
-			ColorMatInputConnectionTo(EditorOnly->EmissiveColor, ConvertNode, 5, MP_EmissiveColor);
-			Vector3MatInputConnectionTo(EditorOnly->Normal, ConvertNode, 6, MP_Normal, SUBSTRATE_COPY_CONNECTION);
-			Vector3MatInputConnectionTo(EditorOnly->Tangent, ConvertNode, 7, MP_Tangent);
-			ColorMatInputConnectionTo(EditorOnly->SubsurfaceColor, ConvertNode, 8, MP_SubsurfaceColor);
-			ScalarMatInputConnectionTo(EditorOnly->ClearCoat, ConvertNode, 9, MP_CustomData0);
-			ScalarMatInputConnectionTo(EditorOnly->ClearCoatRoughness, ConvertNode, 10, MP_CustomData1);
-			ScalarMatInputConnectionTo(EditorOnly->Opacity, ConvertNode, 11, MP_Opacity, SUBSTRATE_COPY_CONNECTION);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
+			MoveConnectionTo(EditorOnly->BaseColor, ConvertNode, 0);
+			MoveConnectionTo(EditorOnly->Metallic, ConvertNode, 1);
+			MoveConnectionTo(EditorOnly->Specular, ConvertNode, 2);
+			MoveConnectionTo(EditorOnly->Roughness, ConvertNode, 3);
+			MoveConnectionTo(EditorOnly->Anisotropy, ConvertNode, 4);
+			MoveConnectionTo(EditorOnly->EmissiveColor, ConvertNode, 5);
+			CopyConnectionTo(EditorOnly->Normal, ConvertNode, 6);
+			MoveConnectionTo(EditorOnly->Tangent, ConvertNode, 7);
+			MoveConnectionTo(EditorOnly->SubsurfaceColor, ConvertNode, 8);
+			MoveConnectionTo(EditorOnly->ClearCoat, ConvertNode, 9);
+			MoveConnectionTo(EditorOnly->ClearCoatRoughness, ConvertNode, 10);
+			CopyConnectionTo(EditorOnly->Opacity, ConvertNode, 11);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
 
 			// Add constant for the Unlit shading model
-			ConvertNode->ShadingModelOverride = ShadingModel;
-			check(ShadingModels.CountShadingModels() == 1);
+			UMaterialExpressionShadingModel* ShadingModelNode = NewObject<UMaterialExpressionShadingModel>(this);
+			ReplaceNodeAndMoveToTheRight(ConvertNode, ShadingModelNode);
+			ShadingModelNode->ShadingModel = ShadingModel;
+			ConvertNode->ShadingModel.Connect(0, ShadingModelNode);
+
+			AddStrataShadingModelFromMaterialShadingModel(ConvertNode->ConvertedStrataMaterialInfo, ShadingModels);
+			check(ConvertNode->ConvertedStrataMaterialInfo.CountShadingModels() == 1);
 
 			// Now pass through the convert to decal node, which flag the material as SSM_Decal, which will set the domain to Decal.
-			UMaterialExpressionSubstrateConvertToDecal* ConvertToDecalNode= NewObject<UMaterialExpressionSubstrateConvertToDecal>(this);
-			ConvertToDecalNode->Material = this;
+			UMaterialExpressionStrataConvertToDecal* ConvertToDecalNode= NewObject<UMaterialExpressionStrataConvertToDecal>(this);
 			ReplaceNodeAndMoveToTheRight(ConvertNode, ConvertToDecalNode);
 			ConvertToDecalNode->DecalMaterial.Connect(0, ConvertNode);
 
@@ -3717,11 +3646,10 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 			ShadingModels.ClearShadingModels();
 			ShadingModels.AddShadingModel(MSM_Unlit);
 
-			UMaterialExpressionSubstrateUI* UINode = NewObject<UMaterialExpressionSubstrateUI>(this);
-			UINode->Material = this;
+			UMaterialExpressionStrataUI* UINode = NewObject<UMaterialExpressionStrataUI>(this);
 			SetPosXAndMoveReferenceToTheRight(UINode);
-			ColorMatInputConnectionTo(EditorOnly->EmissiveColor, UINode, 0, MP_EmissiveColor);
-			ScalarMatInputConnectionTo(EditorOnly->Opacity, UINode, 1, MP_Opacity, SUBSTRATE_COPY_CONNECTION);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
+			MoveConnectionTo(EditorOnly->EmissiveColor, UINode, 0);
+			CopyConnectionTo(EditorOnly->Opacity, UINode, 1);	// We only copy, to keep Opacity on the root node in case BLEND_AlphaComposite is selected.
 
 			EditorOnly->FrontMaterial.Connect(0, UINode);
 			bInvalidateShader = true;
@@ -3738,22 +3666,22 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 
 		if (ThinTranslucentOutput)
 		{
-			ConnectionTo(*ThinTranslucentOutput->GetInput(0), ConvertNode, 12);	 // TransmittanceColor
+			MoveConnectionTo(*ThinTranslucentOutput->GetInput(0), ConvertNode, 12);	 // TransmittanceColor
 		}
 		if (SingleLayerWaterOutput)
 		{
-			ConnectionTo(*SingleLayerWaterOutput->GetInput(0), ConvertNode, 13); // WaterScatteringCoefficients
-			ConnectionTo(*SingleLayerWaterOutput->GetInput(1), ConvertNode, 14); // WaterAbsorptionCoefficients
-			ConnectionTo(*SingleLayerWaterOutput->GetInput(2), ConvertNode, 15); // WaterPhaseG
-			ConnectionTo(*SingleLayerWaterOutput->GetInput(3), ConvertNode, 16); // ColorScaleBehindWater
+			MoveConnectionTo(*SingleLayerWaterOutput->GetInput(0), ConvertNode, 13); // WaterScatteringCoefficients
+			MoveConnectionTo(*SingleLayerWaterOutput->GetInput(1), ConvertNode, 14); // WaterAbsorptionCoefficients
+			MoveConnectionTo(*SingleLayerWaterOutput->GetInput(2), ConvertNode, 15); // WaterPhaseG
+			MoveConnectionTo(*SingleLayerWaterOutput->GetInput(3), ConvertNode, 16); // ColorScaleBehindWater
 		}
 		if (ClearCoatBottomNormalOutput)
 		{
-			ConnectionTo(*ClearCoatBottomNormalOutput->GetInput(0), ConvertNode, 17, SUBSTRATE_COPY_CONNECTION); // ClearCoatNormal
+			CopyConnectionTo(*ClearCoatBottomNormalOutput->GetInput(0), ConvertNode, 17); // ClearCoatNormal
 		}
 		if (TangentOutput)
 		{
-			ConnectionTo(*TangentOutput->GetInput(0), ConvertNode, 18, SUBSTRATE_COPY_CONNECTION);	// TangentOutput
+			CopyConnectionTo(*TangentOutput->GetInput(0), ConvertNode, 18);	// TangentOutput
 		}
 	}
 
@@ -3761,8 +3689,8 @@ void UMaterial::ConvertMaterialToSubstrateMaterial()
 	{
 		// Now force the material to recompile and we use a hash of the original StateId.
 		// This is to avoid having different StateId each time we load the material and to not forever recompile it, i.e. use a cached version.
-		static FGuid LegacyToSubstrateConversionGuid(TEXT("0DAD35FE-21AE-4274-8B41-6C9D47285D8A"));
-		ReleaseResourcesAndMutateDDCKey(LegacyToSubstrateConversionGuid);
+		static FGuid LegacyToStrataConversionGuid(TEXT("0DAD35FE-21AE-4274-8B41-6C9D47285D8A"));
+		ReleaseResourcesAndMutateDDCKey(LegacyToStrataConversionGuid);
 	}
 
 	// For rebuild the shading mode since we have change it
@@ -3877,12 +3805,12 @@ void UMaterial::PostLoad()
 	DoMaterialAttributeReorder(&EditorOnly->CustomizedUVs[6], UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->CustomizedUVs[7], UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->PixelDepthOffset, UEVer, RenderObjVer, UE5MainVer);
-
-	//My-Add-30/05/24
+	
+//My-Add-SketchPipeline
 	DoMaterialAttributeReorder(&EditorOnly->SketchShadowUVScale, UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->SketchColorMixing, UEVer, RenderObjVer, UE5MainVer);
-	//End
-
+//End-11/06/24
+	
 	DoMaterialAttributeReorder(&EditorOnly->ShadingModelFromMaterialExpression, UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->FrontMaterial, UEVer, RenderObjVer, UE5MainVer);
 	DoMaterialAttributeReorder(&EditorOnly->SurfaceThickness, UEVer, RenderObjVer, UE5MainVer);
@@ -3993,14 +3921,16 @@ void UMaterial::PostLoad()
 #if WITH_EDITOR
 	// Create exec flow expressions, if needed
 	CreateExecutionFlowExpressions();
-
-	// Clean up any removed material expression classes. If running in editor, also release resources and mutate DDC key.
-	if (EditorOnly->ExpressionCollection.Expressions.Remove(nullptr) != 0 && GIsEditor)
+	if (GIsEditor)
 	{
-		// Force this material to recompile because its expressions have changed
-		// We're not providing a deterministic transformation guid because there could be many different ways expression
-		// could change. Each conversion code removing such expression would need its own guid.
-		ReleaseResourcesAndMutateDDCKey();
+		// Clean up any removed material expression classes	
+		if (EditorOnly->ExpressionCollection.Expressions.Remove(nullptr) != 0)
+		{
+			// Force this material to recompile because its expressions have changed
+			// We're not providing a deterministic transformation guid because there could be many different ways expression
+			// could change. Each conversion code removing such expression would need its own guid.
+			ReleaseResourcesAndMutateDDCKey();
+		}
 	}
 #endif // WITH_EDITOR
 
@@ -4083,9 +4013,9 @@ void UMaterial::PostLoad()
 	}
 #endif
 
-	// Substrate materials conversion needs to be done after expressions are cached, otherwise material function won't have 
+	// Strata materials conversion needs to be done after expressions are cached, otherwise material function won't have 
 	// valid inputs in certain cases
-	ConvertMaterialToSubstrateMaterial();
+	ConvertMaterialToStrataMaterial();
 
 	checkf(CachedExpressionData, TEXT("Missing cached expression data for material, should have been either serialized or created during PostLoad"));
 
@@ -4191,7 +4121,7 @@ void UMaterial::PostLoad()
 				}
 			}
 
-			const bool bSkipCompilationOnPostLoad = IsMaterialMapDDCEnabled() == false;
+			const bool bSkipCompilationOnPostLoad = IsShaderJobCacheDDCEnabled();
 			if (bSkipCompilationOnPostLoad)
 			{
 				CacheResourceShadersForRendering(false, EMaterialShaderPrecompileMode::None);
@@ -4208,12 +4138,6 @@ void UMaterial::PostLoad()
 	{
 		// Ensure that the ReferencedTextureGuids array is up to date.
 		UpdateLightmassTextureTracking();
-	}
-
-	if (IsDeferredDecal())
-	{
-		FPSOPrecacheParams PSOPrecacheParams;
-		UMaterialInterface::PrecachePSOs(&FLocalVertexFactory::StaticType, PSOPrecacheParams);
 	}
 
 	//DumpDebugInfo(*GLog);
@@ -4342,7 +4266,7 @@ bool UMaterial::HasSurfaceThicknessConnected() const
 	return IsPropertyConnected(MP_SurfaceThickness);
 }
 
-bool UMaterial::HasSubstrateFrontMaterialConnected() const
+bool UMaterial::HasStrataFrontMaterialConnected() const
 {
 	return IsPropertyConnected(MP_FrontMaterial);
 }
@@ -4470,11 +4394,11 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 	{
 		const UMaterialEditorOnlyData* EditorOnly = GetEditorOnlyData();
 		FString PropertyName = InProperty->GetName();
-		const bool bSubstrateEnabled = Substrate::IsSubstrateEnabled();
+		const bool bStrataEnabled = Strata::IsStrataEnabled();
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, MaterialDomain))
 		{
-			return !bSubstrateEnabled; // Material domain is no longer tweakable with Substrate. It is instead derived from the graph.
+			return !bStrataEnabled; // Material domain is no longer tweakable with Strata. It is instead derived from the graph.
 		}
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, PhysMaterial) || PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, PhysMaterialMask))
@@ -4500,9 +4424,8 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, MaterialDecalResponse))
 		{
 			static auto* CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DBuffer"));
-			static auto* CVarMobile = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.DBuffer"));
 
-			return MaterialDomain == MD_Surface && (CVar->GetValueOnGameThread() > 0 || CVarMobile->GetValueOnGameThread() > 0);
+			return MaterialDomain == MD_Surface && CVar->GetValueOnGameThread() > 0;
 		}		
 
 		if(MaterialDomain == MD_PostProcess)
@@ -4537,9 +4460,7 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bIsBlendable) ||
 			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bEnableStencilTest) ||
 			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, StencilCompare) ||
-			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, StencilRefValue) ||
-			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, NeuralProfileId) ||
-			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bUsedWithNeuralNetworks)
+			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, StencilRefValue)
 			)
 		{
 			return MaterialDomain == MD_PostProcess;
@@ -4547,24 +4468,24 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, BlendMode))
 		{
-			if (bSubstrateEnabled)
+			if (bStrataEnabled)
 			{
-				return ((MaterialDomain != MD_PostProcess && MaterialDomain != MD_LightFunction && MaterialDomain != MD_Volume) || IsPostProcessMaterialOutputingAlpha());
+				return ((MaterialDomain != MD_PostProcess && MaterialDomain != MD_LightFunction && MaterialDomain != MD_Volume) || (MaterialDomain == MD_PostProcess && BlendableOutputAlpha));
 			}
 			else
 			{
-				return (MaterialDomain == MD_DeferredDecal || MaterialDomain == MD_Surface || MaterialDomain == MD_Volume || MaterialDomain == MD_UI || IsPostProcessMaterialOutputingAlpha());
+				return (MaterialDomain == MD_DeferredDecal || MaterialDomain == MD_Surface || MaterialDomain == MD_Volume || MaterialDomain == MD_UI || (MaterialDomain == MD_PostProcess && BlendableOutputAlpha));
 			}
 		}
 	
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, ShadingModel))
 		{
-			return !bSubstrateEnabled && MaterialDomain == MD_Surface;
+			return !bStrataEnabled && MaterialDomain == MD_Surface;
 		}
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bIsThinSurface))
 		{
-			return bSubstrateEnabled && MaterialDomain == MD_Surface;
+			return bStrataEnabled && MaterialDomain == MD_Surface;
 		}
 
 		if (FCString::Strncmp(*PropertyName, TEXT("bUsedWith"), 9) == 0)
@@ -4582,14 +4503,9 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, RefractionCoverageMode))
 		{
-			return bSubstrateEnabled;
+			return bStrataEnabled;
 		}
-
-		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bHasPixelAnimation))
-		{
-			return MaterialDomain == MD_Surface && IsOpaqueOrMaskedBlendMode(BlendMode);
-		}
-
+	
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, TranslucencyPass)
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bEnableResponsiveAA)
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bScreenSpaceReflections)
@@ -4610,8 +4526,8 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, bIsSky))
 		{
-			return (!bSubstrateEnabled && (MaterialDomain != MD_DeferredDecal && GetShadingModels().IsUnlit() && !IsTranslucentBlendMode(BlendMode)))
-				|| (bSubstrateEnabled && (MaterialDomain != MD_DeferredDecal && !IsTranslucentBlendMode(BlendMode)));
+			return (!bStrataEnabled && (MaterialDomain != MD_DeferredDecal && GetShadingModels().IsUnlit() && !IsTranslucentBlendMode(BlendMode)))
+				|| (bStrataEnabled && (MaterialDomain != MD_DeferredDecal && !IsTranslucentBlendMode(BlendMode)));
 		}
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, TranslucencyLightingMode)
@@ -4624,8 +4540,8 @@ bool UMaterial::CanEditChange(const FProperty* InProperty) const
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, TranslucentMultipleScatteringExtinction)
 			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, TranslucentShadowStartOffset))
 		{
-			return (!bSubstrateEnabled && (MaterialDomain != MD_DeferredDecal && IsTranslucentBlendMode(BlendMode) && GetShadingModels().IsLit()))
-				|| (bSubstrateEnabled && (MaterialDomain != MD_DeferredDecal && IsTranslucentBlendMode(BlendMode)));
+			return (!bStrataEnabled && (MaterialDomain != MD_DeferredDecal && IsTranslucentBlendMode(BlendMode) && GetShadingModels().IsLit()))
+				|| (bStrataEnabled && (MaterialDomain != MD_DeferredDecal && IsTranslucentBlendMode(BlendMode)));
 		}
 
 		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UMaterial, SubsurfaceProfile))
@@ -4706,10 +4622,10 @@ void UMaterial::PostEditChangePropertyInternal(FPropertyChangedEvent& PropertyCh
 	//If we can be sure this material would be the same opaque as it is masked then allow it to be assumed opaque.
 	bCanMaskedBeAssumedOpaque = !EditorOnly->OpacityMask.Expression && !(EditorOnly->OpacityMask.UseConstant && EditorOnly->OpacityMask.Constant < 0.999f) && !bUseMaterialAttributes;
 
-	// If BLEND_TranslucentColoredTransmittance is selected while Substrate is not enabled, force BLEND_Translucent blend mode
-	if (!Substrate::IsSubstrateEnabled() && BlendMode == BLEND_TranslucentColoredTransmittance)
-	{
-		BlendMode = BLEND_Translucent;
+	// If BLEND_TranslucentColoredTransmittance is selected while Strata is not enabled, force BLEND_Translucent blend mode
+	if (!Strata::IsStrataEnabled() && BlendMode == BLEND_TranslucentColoredTransmittance)
+		{
+			BlendMode = BLEND_Translucent;
 	}
 
 	bool bRequiresCompilation = true;
@@ -4927,13 +4843,13 @@ void UMaterial::RebuildShadingModelField()
 	ShadingModels.ClearShadingModels();
 	UMaterialEditorOnlyData* EditorOnly = GetEditorOnlyData();
 
-	if (Substrate::IsSubstrateEnabled() && EditorOnly->FrontMaterial.IsConnected())
+	if (Strata::IsStrataEnabled() && EditorOnly->FrontMaterial.IsConnected())
 	{
-		FSubstrateMaterialInfo SubstrateMaterialInfo;
+		FStrataMaterialInfo StrataMaterialInfo;
 		check(EditorOnly->FrontMaterial.Expression);
-		if (EditorOnly->FrontMaterial.Expression->IsResultSubstrateMaterial(EditorOnly->FrontMaterial.OutputIndex))
+		if (EditorOnly->FrontMaterial.Expression->IsResultStrataMaterial(EditorOnly->FrontMaterial.OutputIndex))
 		{
-			// Mask of all input collected by Substrate BSDF nodes
+			// Mask of all input collected by Strata BSDF nodes
 			static const uint64 ConnectionMask = 
 				  (1ull << MP_BaseColor)
 				| (1ull << MP_Metallic)
@@ -4951,16 +4867,16 @@ void UMaterial::RebuildShadingModelField()
 				| (1ull << MP_DiffuseColor)
 				| (1ull << MP_SpecularColor);
 
-			EditorOnly->FrontMaterial.Expression->GatherSubstrateMaterialInfo(SubstrateMaterialInfo, EditorOnly->FrontMaterial.OutputIndex);
+			EditorOnly->FrontMaterial.Expression->GatherStrataMaterialInfo(StrataMaterialInfo, EditorOnly->FrontMaterial.OutputIndex);
 
-			// Override the cached expression data with collected connection from SubstrateMaterialInfo, but preserve all other input (e.g., refraction)
+			// Override the cached expression data with collected connection from StrataMaterialInfo, but preserve all other input (e.g., refraction)
 			check(this->CachedExpressionData);
 			this->CachedExpressionData->PropertyConnectedMask &= ~ConnectionMask;
-			this->CachedExpressionData->PropertyConnectedMask |= SubstrateMaterialInfo.GetPropertyConnected();
+			this->CachedExpressionData->PropertyConnectedMask |= StrataMaterialInfo.GetPropertyConnected();
 
-			if (SubstrateMaterialInfo.GetSubstrateTreeOutOfStackDepthOccurred())
+			if (StrataMaterialInfo.GetStrataTreeOutOfStackDepthOccurred())
 			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_Unlit);
+				StrataMaterialInfo.AddShadingModel(SSM_Unlit);
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_Unlit;
 				ShadingModels.AddShadingModel(MSM_Unlit);
@@ -4971,22 +4887,20 @@ void UMaterial::RebuildShadingModelField()
 		}
 
 		bool bSanitizeMaterial = false;
-		if (!SubstrateMaterialInfo.IsValid() && !SubstrateMaterialInfo.HasShadingModelFromExpression() )
+		if (!StrataMaterialInfo.IsValid())
 		{
 			bSanitizeMaterial = true;
 			UE_LOG(LogMaterial, Error, TEXT("%s: Material information is invalid."), *GetName());
 		}
-
-		if (SubstrateMaterialInfo.HasShadingModel(SSM_Decal))
+		if (StrataMaterialInfo.CountShadingModels() > 1)
 		{
-			// Keep the decals information and remove the shading from expression part 
-			// since we are going to bake down the material to a single slab using parameter blending.
-			SubstrateMaterialInfo.SetShadingModelFromExpression(false);
-		}
-
-		if (SubstrateMaterialInfo.CountShadingModels() > 1)
-		{
-			if (SubstrateMaterialInfo.HasShadingModelFromExpression())
+			if (StrataMaterialInfo.HasShadingModel(SSM_Decal))
+			{
+				// Keep the decals information and remove the shading from expression part 
+				// since we are going to bake down the material to a single slab using parameter blending.
+				StrataMaterialInfo.SetShadingModelFromExpression(false);
+			}
+			else if (StrataMaterialInfo.HasShadingModelFromExpression())
 			{
 				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
 				{
@@ -4998,78 +4912,33 @@ void UMaterial::RebuildShadingModelField()
 					bSanitizeMaterial = true;
 				}
 			}
-			else if (SubstrateMaterialInfo.CountShadingModels() == 2 && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_DefaultLit) && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_SubsurfaceMFP))
+			else if (StrataMaterialInfo.CountShadingModels() == 2 && StrataMaterialInfo.HasShadingModel(EStrataShadingModel::SSM_DefaultLit) && StrataMaterialInfo.HasShadingModel(EStrataShadingModel::SSM_SubsurfaceLit))
 			{
-				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
+				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked) 
 				{
-					SubstrateMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceMFP);	// We only consider SSS subsurface post process for opaque materials.
+					// We only consider SSS subsurface post process for opaque materials.
+					// STRATA_TODO what does this case cover?
+					StrataMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceLit);
 				}
 				else
 				{
-					bSanitizeMaterial = true;										// For transparent, we will fall back to use DefaultLit with simple volumetric
+					// For transparent, we will fall back to use DefaultLit with simple volumetric
+					bSanitizeMaterial = true;
 				}
 			}
-			else if (SubstrateMaterialInfo.CountShadingModels() == 2 && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_DefaultLit) && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_SubsurfaceProfile))
-			{
-				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
-				{
-					SubstrateMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceProfile);// We only consider SSS subsurface post process for opaque materials.
-				}
-				else
-				{
-					bSanitizeMaterial = true;										// For transparent, we will fall back to use DefaultLit with simple volumetric
-				}
-			}
-			else if (SubstrateMaterialInfo.CountShadingModels() > 1 && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_SubsurfaceMFP))
+			else if (StrataMaterialInfo.CountShadingModels() > 1 && StrataMaterialInfo.HasShadingModel(EStrataShadingModel::SSM_SubsurfaceLit))
 			{
 				// When we gather the worst case slab material, we can hit multiple shading models when gathering from multiple BSDF possibilities of switch nodes.
 				// We do not want to sanitize the material in this case, but only keep the worst case: subsurface with all potential features on a slab.
-				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
+				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked) 
 				{
 					// We only consider SSS subsurface post process for opaque materials. This can also be triggered by switch node accumulating multiple slab node.
 					// We still keep all the other material info to consider the worst case when encountering multiple shading models. And we also keep around the encountered subsurface profiles.
-					SubstrateMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceMFP);
+					StrataMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceLit);
 				}
 				else
 				{
 					// For transparent, we will fall back to use DefaultLit worst case with simple volumetric.
-					bSanitizeMaterial = true;
-				}
-			}
-			else if (SubstrateMaterialInfo.CountShadingModels() > 1 && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_SubsurfaceProfile))
-			{
-				// When we gather the worst case slab material, we can hit multiple shading models when gathering from multiple BSDF possibilities of switch nodes.
-				// We do not want to sanitize the material in this case, but only keep the worst case: subsurface with all potential features on a slab.
-				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
-				{
-					// We only consider SSS subsurface post process for opaque materials. This can also be triggered by switch node accumulating multiple slab node.
-					// We still keep all the other material info to consider the worst case when encountering multiple shading models. And we also keep around the encountered subsurface profiles.
-					SubstrateMaterialInfo.SetSingleShadingModel(SSM_SubsurfaceProfile);
-				}
-				else
-				{
-					// For transparent, we will fall back to use DefaultLit worst case with simple volumetric.
-					bSanitizeMaterial = true;
-				}
-			}
-			else if (SubstrateMaterialInfo.CountShadingModels() > 1 && MaterialDomain == MD_Surface)
-			{
-				// Case with SSS Profile or SSS MFP are already been handled by above cases. Simply fallback onto DefaultLit
-				if (BlendMode == EBlendMode::BLEND_Opaque || BlendMode == EBlendMode::BLEND_Masked)
-				{
-					SubstrateMaterialInfo.SetSingleShadingModel(SSM_DefaultLit);
-				}
-				else
-				{
-					// For transparent, we will fall back to use DefaultLit worst case with simple volumetric.
-					bSanitizeMaterial = true;
-				}
-			}
-			else if (SubstrateMaterialInfo.CountShadingModels() == 2 && SubstrateMaterialInfo.HasShadingModel(ESubstrateShadingModel::SSM_Decal))
-			{
-				// If material has SSM_Decal it has to have 'decal' domain and DefaultLit shading model
-				if (MaterialDomain != MD_DeferredDecal || !SubstrateMaterialInfo.HasShadingModel(SSM_DefaultLit))
-				{
 					bSanitizeMaterial = true;
 				}
 			}
@@ -5080,55 +4949,20 @@ void UMaterial::RebuildShadingModelField()
 				UE_LOG(LogMaterial, Error, TEXT("%s: Material has more than a single material represented."), *GetName());
 			}
 		}
-
-		if ((SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceMFP) || SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceProfile)) 
-			&& (BlendMode != EBlendMode::BLEND_Opaque && BlendMode != EBlendMode::BLEND_Masked))
+		if (StrataMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceLit) && (BlendMode != EBlendMode::BLEND_Opaque && BlendMode != EBlendMode::BLEND_Masked))
 		{
 			// For transparent, we will fall back to use DefaultLit with simple volumetric
 			bSanitizeMaterial = true;
 		}
-
 		if (bSanitizeMaterial)
 		{
-			SubstrateMaterialInfo = FSubstrateMaterialInfo();
-			SubstrateMaterialInfo.AddShadingModel(SSM_DefaultLit);
-
-			if (MaterialDomain == MD_Surface)
-			{
-				// Nothing to do, the node should have added its own type. And if not type but from expression, we are going to generate that below.
-				//AddSurfaceSubstrateShadingModelFromMaterialShadingModel(SubstrateMaterialInfo, ShadingModel);
-			}
-			else if (MaterialDomain == MD_DeferredDecal)
-			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_Decal);
-			}
-			else if (MaterialDomain == MD_LightFunction)
-			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_VolumetricFogCloud);
-			}
-			else if (MaterialDomain == MD_Volume)
-			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_LightFunction);
-			}
-			else if (MaterialDomain == MD_PostProcess)
-			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_PostProcess);
-			}
-			else if (MaterialDomain == MD_UI)
-			{
-				SubstrateMaterialInfo.AddShadingModel(SSM_UI);
-			}
-			else if (MaterialDomain == MD_RuntimeVirtualTexture)
-			{
-				// TODO
-			}
+			StrataMaterialInfo = FStrataMaterialInfo();
+			StrataMaterialInfo.AddShadingModel(SSM_DefaultLit);
 		}
 		
-		if (SubstrateMaterialInfo.HasShadingModelFromExpression())
+		if (StrataMaterialInfo.HasShadingModelFromExpression())
 		{
 			MaterialDomain = EMaterialDomain::MD_Surface;
-			ShadingModel = MSM_FromMaterialExpression;
-
 			{
 				TArray<UMaterialExpressionShadingModel*> ShadingModelExpressions;
 				GetAllExpressionsInMaterialAndFunctionsOfType(ShadingModelExpressions);
@@ -5139,7 +4973,6 @@ void UMaterial::RebuildShadingModelField()
 					if (MatExpr->ShadingModel < MSM_NUM)
 					{
 						ShadingModels.AddShadingModel(MatExpr->ShadingModel);
-						AddSurfaceSubstrateShadingModelFromMaterialShadingModel(SubstrateMaterialInfo, MatExpr->ShadingModel);
 					}
 				}
 
@@ -5147,24 +4980,18 @@ void UMaterial::RebuildShadingModelField()
 				if (!ShadingModels.IsValid())
 				{
 					ShadingModels.AddShadingModel(MSM_DefaultLit);
-					AddSurfaceSubstrateShadingModelFromMaterialShadingModel(SubstrateMaterialInfo, MSM_DefaultLit);
 				}
 			}
 		}
 		else
 		{
-			// Now derive some properties from the material into the legacy fields
-			if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_Unlit))
+			// Now derive some properties from the material
+			if (StrataMaterialInfo.HasOnlyShadingModel(SSM_Unlit))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_Unlit;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_DefaultLit))
-			{
-				MaterialDomain = EMaterialDomain::MD_Surface;
-				ShadingModel = MSM_DefaultLit;
-			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceProfile) || SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceMFP))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceLit))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_SubsurfaceProfile;
@@ -5174,49 +5001,38 @@ void UMaterial::RebuildShadingModelField()
 					BlendMode = EBlendMode::BLEND_Opaque;
 				}
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceWrap))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_DefaultLit))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
-				ShadingModel = MSM_Subsurface;
-				// This is a valid shading mode for both opaque/masked/translucent blend modes
+				ShadingModel = MSM_DefaultLit;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceThinTwoSided))
-			{
-				MaterialDomain = EMaterialDomain::MD_Surface;
-				ShadingModel = MSM_TwoSidedFoliage;
-			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_ThinTranslucent))
-			{
-				MaterialDomain = EMaterialDomain::MD_Surface;
-				ShadingModel = MSM_ThinTranslucent;
-			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_VolumetricFogCloud))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_VolumetricFogCloud))
 			{
 				MaterialDomain = EMaterialDomain::MD_Volume;
 				ShadingModel = MSM_DefaultLit;
 				BlendMode = EBlendMode::BLEND_Additive;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_Hair))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_Hair))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_Hair;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_Eye))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_Eye))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_Eye;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_Cloth))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_Cloth))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_Cloth;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_ClearCoat))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_ClearCoat))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_ClearCoat;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SingleLayerWater))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_SingleLayerWater))
 			{
 				MaterialDomain = EMaterialDomain::MD_Surface;
 				ShadingModel = MSM_SingleLayerWater;
@@ -5225,29 +5041,29 @@ void UMaterial::RebuildShadingModelField()
 					BlendMode = EBlendMode::BLEND_Opaque;
 				}
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_LightFunction))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_LightFunction))
 			{
 				MaterialDomain = EMaterialDomain::MD_LightFunction;
 				ShadingModel = MSM_Unlit;
 				BlendMode = EBlendMode::BLEND_Opaque;
 			}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_PostProcess))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_PostProcess))
 			{
 				MaterialDomain = EMaterialDomain::MD_PostProcess;
 				ShadingModel = MSM_Unlit;
-				// We keep the blend mode resulting from ConvertLegacyToSubstrateBlendMode because post processes can be translucent.
+				// We keep the blend mode resulting from ConvertLegacyToStrataBlendMode because post processes can be translucent.
 				// However, we do force opaque mode if blending has been disabled via the post-process specific BlendableOutputAlpha option.
-				if (!IsPostProcessMaterialOutputingAlpha())
+				if (!BlendableOutputAlpha)
 				{
 					BlendMode = BLEND_Opaque;
 				}
 				}
-			else if (SubstrateMaterialInfo.HasOnlyShadingModel(SSM_UI))
+			else if (StrataMaterialInfo.HasOnlyShadingModel(SSM_UI))
 			{
 				MaterialDomain = EMaterialDomain::MD_UI;
 				ShadingModel = MSM_Unlit;
 			}
-			else if (SubstrateMaterialInfo.HasShadingModel(SSM_Decal))
+			else if (StrataMaterialInfo.HasShadingModel(SSM_Decal))
 			{
 				// Decal can have multiple shading model
 				MaterialDomain = EMaterialDomain::MD_DeferredDecal;
@@ -5260,16 +5076,20 @@ void UMaterial::RebuildShadingModelField()
 
 		// Now, reset the subsurface profile (in case it has been removed from any slab before) and set it only if needed.
 		SubsurfaceProfile = nullptr;
-		if ((SubstrateMaterialInfo.HasOnlyShadingModel(SSM_Eye) || SubstrateMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceProfile)) && SubstrateMaterialInfo.CountSubsurfaceProfiles() > 0)
+		if ((StrataMaterialInfo.HasOnlyShadingModel(SSM_Eye) || StrataMaterialInfo.HasOnlyShadingModel(SSM_SubsurfaceLit)) && StrataMaterialInfo.CountSubsurfaceProfiles() > 0)
 		{
-			SubsurfaceProfile = SubstrateMaterialInfo.GetSubsurfaceProfile();
+			if (StrataMaterialInfo.CountSubsurfaceProfiles() > 1)
+			{
+				UE_LOG(LogMaterial, Error, TEXT("%s: Material has more than a single sub-surface profile used."), *GetName());
+			}
+			SubsurfaceProfile = StrataMaterialInfo.GetSubsurfaceProfile();
 		}
 
 		// Set specular profile if any
-		SpecularProfiles.SetNum(SubstrateMaterialInfo.CountSpecularProfiles());
-		for (int32 It = 0, Count = SubstrateMaterialInfo.CountSpecularProfiles(); It<Count; ++It)
+		SpecularProfiles.SetNum(StrataMaterialInfo.CountSpecularProfiles());
+		for (int32 It = 0, Count = StrataMaterialInfo.CountSpecularProfiles(); It<Count; ++It)
 		{
-			SpecularProfiles[It] = SubstrateMaterialInfo.GetSpecularProfile(It);
+			SpecularProfiles[It] = StrataMaterialInfo.GetSpecularProfile(It);
 		}
 	}
 	// If using shading model from material expression, go through the expressions and look for the ShadingModel expression to figure out what shading models need to be supported in this material.
@@ -5278,8 +5098,6 @@ void UMaterial::RebuildShadingModelField()
 	{
 		TArray<UMaterialExpressionShadingModel*> ShadingModelExpressions;
 		GetAllExpressionsInMaterialAndFunctionsOfType(ShadingModelExpressions);
-
-		ShadingModel = MSM_FromMaterialExpression;
 
 		for (UMaterialExpressionShadingModel* MatExpr : ShadingModelExpressions)
 		{
@@ -5357,9 +5175,6 @@ void UMaterial::BeginDestroy()
 			{
 				Resource->PrepareDestroy_RenderThread();
 			}
-
-			// Release the references before assigning the bool below.
-			ResourcesToDestroy.Empty();
 
 			*Released = true;
 		});
@@ -5453,14 +5268,7 @@ bool UMaterial::CanBeClusterRoot() const
 
 void UMaterial::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
 {
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS;
 	Super::GetAssetRegistryTags(OutTags);
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS;
-}
-
-void UMaterial::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
-{
-	Super::GetAssetRegistryTags(Context);
 }
 
 #if WITH_EDITOR
@@ -5766,21 +5574,14 @@ void UMaterial::CompileODSCMaterialsForRemoteRecompile(TArray<FODSCRequestPayloa
 		}
 	}
 
-	// pass one, cache the coalesced shaders in case there are ordering dependencies in the list
-	for (const auto& Entry : CoalescedShadersToCompile)
-	{
-		UMaterialInterface* MaterialInterface = Entry.Key;
-		const FShadersToCompile& Shaders = Entry.Value;
-		MaterialInterface->CacheGivenTypesForCooking(Shaders.ShaderPlatform, Shaders.FeatureLevel, Shaders.QualityLevel, Shaders.VFTypes, Shaders.PipelineTypes, Shaders.ShaderTypes);
-	}
-
-	// pass two can now run through the shaders in the same order successfully
 	for (const auto& Entry : CoalescedShadersToCompile)
 	{
 		UMaterialInterface* MaterialInterface = Entry.Key;
 		const FShadersToCompile& Shaders = Entry.Value;
 
 		TArray<FMaterialResource*>& ResourceArray = CompilingResources.Add(MaterialInterface->GetPathName(), TArray<FMaterialResource*>());
+		MaterialInterface->CacheGivenTypesForCooking(Shaders.ShaderPlatform, Shaders.FeatureLevel, Shaders.QualityLevel, Shaders.VFTypes, Shaders.PipelineTypes, Shaders.ShaderTypes);
+
 		FMaterialResource* MaterialResource = MaterialInterface->GetMaterialResource(Shaders.FeatureLevel, Shaders.QualityLevel);
 		check(MaterialResource);
 		check(MaterialResource->GetFeatureLevel() == Shaders.FeatureLevel);
@@ -5917,7 +5718,7 @@ static void SetMaterialInputDescription(FMaterialAttributesInput& Input, bool bH
 	OutDescription.bHidden = bHidden;
 }
 
-static void SetMaterialInputDescription(FSubstrateMaterialInput& Input, bool bHidden, FMaterialInputDescription& OutDescription)
+static void SetMaterialInputDescription(FStrataMaterialInput& Input, bool bHidden, FMaterialInputDescription& OutDescription)
 {
 	OutDescription.Type = UE::Shader::EValueType::Void;
 	OutDescription.Input = &Input;
@@ -5945,12 +5746,12 @@ bool UMaterial::GetExpressionInputDescription(EMaterialProperty InProperty, FMat
 	case MP_SubsurfaceColor: SetMaterialInputDescription(EditorOnly->SubsurfaceColor, false, OutDescription); return true;
 	case MP_CustomData0: SetMaterialInputDescription(EditorOnly->ClearCoat, false, OutDescription); return true;
 	case MP_CustomData1: SetMaterialInputDescription(EditorOnly->ClearCoatRoughness, false, OutDescription); return true;
-
-	//My-Add-30/05/24
+	
+//My-Add-SketchPipeline
 	case MP_SketchShadowUVScale: SetMaterialInputDescription(EditorOnly->SketchShadowUVScale, false, OutDescription); return true;
 	case MP_SketchColorMixing: SetMaterialInputDescription(EditorOnly->SketchColorMixing, false, OutDescription); return true;
-	//End
-
+//End-11/06/24
+	
 	case MP_AmbientOcclusion: SetMaterialInputDescription(EditorOnly->AmbientOcclusion, false, OutDescription); return true;
 	case MP_Refraction: SetMaterialInputDescription(EditorOnly->Refraction, false, OutDescription); return true;
 	case MP_MaterialAttributes: SetMaterialInputDescription(EditorOnly->MaterialAttributes, false, OutDescription); return true;
@@ -6012,7 +5813,7 @@ void UMaterial::GetAllExpressionsForCustomInterpolators(TArray<class UMaterialEx
 
 #if WITH_EDITOR
 bool UMaterial::GetAllReferencedExpressions(TArray<UMaterialExpression*>& OutExpressions, struct FStaticParameterSet* InStaticParameterSet,
-	ERHIFeatureLevel::Type InFeatureLevel, EMaterialQualityLevel::Type InQuality, ERHIShadingPath::Type InShadingPath, const bool bInRecurseIntoMaterialFunctions, TSet<UClass*>* InMobileCustomOutputExpressionTypesToQuery)
+	ERHIFeatureLevel::Type InFeatureLevel, EMaterialQualityLevel::Type InQuality, ERHIShadingPath::Type InShadingPath, const bool bInRecurseIntoMaterialFunctions)
 {
 	using namespace MaterialImpl;
 
@@ -6048,18 +5849,14 @@ bool UMaterial::GetAllReferencedExpressions(TArray<UMaterialExpression*>& OutExp
 			}
 		}
 
-		// TODO: Need an actual ShaderPlatform for a more precise result. This just grabs the handiest one on the current machine.
-		EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(ERHIFeatureLevel::ES3_1);
-		
-		bool bMobileUseVirtualTexturing = UseVirtualTexturing(ShaderPlatform);
-		if (bMobileUseVirtualTexturing || (InMobileCustomOutputExpressionTypesToQuery && InMobileCustomOutputExpressionTypesToQuery->Num() > 0))
+		bool bMobileUseVirtualTexturing = UseVirtualTexturing(ERHIFeatureLevel::ES3_1);
+		if (bMobileUseVirtualTexturing)
 		{
 			TArray<class UMaterialExpressionCustomOutput*> CustomOutputExpressions;
 			GetAllCustomOutputExpressions(CustomOutputExpressions);
 			for (UMaterialExpressionCustomOutput* Expression : CustomOutputExpressions)
 			{
-				if ((bMobileUseVirtualTexturing && Expression->IsA<UMaterialExpressionRuntimeVirtualTextureOutput>()) ||
-					(InMobileCustomOutputExpressionTypesToQuery && InMobileCustomOutputExpressionTypesToQuery->Contains(Expression->GetClass())))
+				if (Expression->IsA<UMaterialExpressionRuntimeVirtualTextureOutput>())
 				{
 					TArray<FExpressionInput*> ProcessedInputs;
 					RecursiveGetExpressionChain(Expression, ProcessedInputs, OutExpressions, InStaticParameterSet, InFeatureLevel, InQuality, InShadingPath, SF_NumFrequencies, MP_MAX, bInRecurseIntoMaterialFunctions);
@@ -6166,7 +5963,7 @@ bool UMaterial::GetTexturesInPropertyChain(EMaterialProperty InProperty, TArray<
 			if (MatExp != NULL)
 			{
 				// Is it a texture sample or texture parameter sample?
-				UMaterialExpressionTextureBase* TextureSampleExp = Cast<UMaterialExpressionTextureBase>(MatExp);
+				UMaterialExpressionTextureSample* TextureSampleExp = Cast<UMaterialExpressionTextureSample>(MatExp);
 				if (TextureSampleExp != NULL)
 				{
 					// Check the default texture...
@@ -6556,12 +6353,12 @@ int32 UMaterial::CompilePropertyEx( FMaterialCompiler* Compiler, const FGuid& At
 		case MP_Anisotropy:				return EditorOnly->Anisotropy.CompileWithDefault(Compiler, Property);
 		case MP_CustomData0:			return EditorOnly->ClearCoat.CompileWithDefault(Compiler, Property);
 		case MP_CustomData1:			return EditorOnly->ClearCoatRoughness.CompileWithDefault(Compiler, Property);
-
-		//My-Add-30/05/24
-		case MP_SketchShadowUVScale:    return EditorOnly->SketchShadowUVScale.CompileWithDefault(Compiler, Property);
+		
+//My-Add-SketchPipeline
+		case MP_SketchShadowUVScale:	return EditorOnly->SketchShadowUVScale.CompileWithDefault(Compiler, Property);
 		case MP_SketchColorMixing:		return EditorOnly->SketchColorMixing.CompileWithDefault(Compiler, Property);
-		//End
-
+//End-11/06/24
+		
 		case MP_AmbientOcclusion:		return EditorOnly->AmbientOcclusion.CompileWithDefault(Compiler, Property);
 		case MP_Refraction:				return EditorOnly->Refraction.CompileWithDefault(Compiler, Property);
 		case MP_EmissiveColor:			return EditorOnly->EmissiveColor.CompileWithDefault(Compiler, Property);
@@ -6615,10 +6412,10 @@ void UMaterial::NotifyCompilationFinished(UMaterialInterface* Material)
 	UMaterial::OnMaterialCompilationFinished().Broadcast(Material);
 }
 
-void UMaterial::ForceRecompileForRendering(EMaterialShaderPrecompileMode CompileMode)
+void UMaterial::ForceRecompileForRendering()
 {
 	UpdateCachedExpressionData();
-	CacheResourceShadersForRendering(false,  CompileMode);
+	CacheResourceShadersForRendering( false );
 }
 
 bool UMaterial::CheckInValidStateForCompilation(class FMaterialCompiler* Compiler) const
@@ -6843,11 +6640,6 @@ bool UMaterial::IsPostProcessMaterial() const
 	return MaterialDomain == MD_PostProcess;
 }
 
-bool UMaterial::IsPostProcessMaterialOutputingAlpha() const
-{
-	return UMaterial::IsPostProcessMaterial() && (BlendableOutputAlpha || BlendableLocation == BL_TranslucencyAfterDOF);
-}
-
 bool UMaterial::WritesToRuntimeVirtualTexture() const
 {
 	return GetCachedExpressionData().bHasRuntimeVirtualTextureOutput;
@@ -6871,20 +6663,9 @@ USpecularProfile* UMaterial::GetSpecularProfile_Internal(uint32 Index) const
 	return SpecularProfiles[Index];
 }
 
-UNeuralProfile* UMaterial::GetNeuralProfile_Internal() const
-{
-	checkSlow(IsInGameThread());
-	return NeuralProfile;
-}
-
 bool UMaterial::CastsRayTracedShadows() const
 {
 	return bCastRayTracedShadows;
-}
-
-bool UMaterial::IsTessellationEnabled() const
-{
-	return bEnableTessellation;
 }
 
 FDisplacementScaling UMaterial::GetDisplacementScaling() const
@@ -6902,11 +6683,6 @@ bool UMaterial::ShouldAlwaysEvaluateWorldPositionOffset() const
 	return bAlwaysEvaluateWorldPositionOffset;
 }
 
-bool UMaterial::HasPixelAnimation() const
-{
-	return bHasPixelAnimation;
-}
-
 void UMaterial::SetShadingModel(EMaterialShadingModel NewModel)
 {
 	ensure(ShadingModel < MSM_NUM);
@@ -6914,7 +6690,7 @@ void UMaterial::SetShadingModel(EMaterialShadingModel NewModel)
 	ShadingModels = FMaterialShadingModelField(ShadingModel);
 }
 
-// This is used to list the supported properties (i.e. when Substrate is enabled/disabled)
+// This is used to list the supported properties (i.e. when Strata is enabled/disabled)
 bool UMaterial::IsPropertySupported(EMaterialProperty InProperty) const
 {
 	bool bSupported = true;
@@ -6924,7 +6700,7 @@ bool UMaterial::IsPropertySupported(EMaterialProperty InProperty) const
 		return false;
 	}
 
-	if (Substrate::IsSubstrateEnabled())
+	if (Strata::IsStrataEnabled())
 	{
 		bSupported = false;
 		switch (InProperty)
@@ -6940,15 +6716,11 @@ bool UMaterial::IsPropertySupported(EMaterialProperty InProperty) const
 		case MP_FrontMaterial:
 			bSupported = true;
 			break;
-		case MP_MaterialAttributes:
-			bSupported = bUseMaterialAttributes;
-			break;
 		}
 
 		if (InProperty >= MP_CustomizedUVs0 && InProperty <= MP_CustomizedUVs7)
 		{
-			// When bUseMaterialAttributes is enabled all MP_CustomizedUVs are valid to match legacy behavior
-			bSupported = bUseMaterialAttributes || (InProperty - MP_CustomizedUVs0) < NumCustomizedUVs ;
+			bSupported = (InProperty - MP_CustomizedUVs0) < NumCustomizedUVs;
 		}
 	}
 	return bSupported;
@@ -6973,7 +6745,6 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	EBlendMode BlendMode,
 	FMaterialShadingModelField ShadingModels,
 	ETranslucencyLightingMode TranslucencyLightingMode,
-	bool bIsTessellationEnabled,
 	bool bBlendableOutputAlpha,
 	bool bUsesDistortion,
 	bool bUsesShadingModelFromMaterialExpression,
@@ -6981,14 +6752,14 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	bool bIsThinSurface,
 	bool bIsSupported)
 {
-	const bool bSubstrateEnabled = Substrate::IsSubstrateEnabled();
-	const bool bSubstrateOpacityOverrideAllowed = BlendMode == BLEND_AlphaComposite; // Should we always have it enabled to be able to be plugged in an fed when blend mode is toggled later on a material instance?
+	const bool bStrataEnabled = Strata::IsStrataEnabled();
+	const bool bStrataOpacityOverrideAllowed = BlendMode == BLEND_AlphaComposite; // Should we always have it enabled to be able to be plugged in an fed when blend mode is toggled later on a material instance?
 
 	if (Domain == MD_PostProcess)
 	{
-		if (bSubstrateEnabled)
+		if (bStrataEnabled)
 		{
-			return InProperty == MP_FrontMaterial || (InProperty == MP_Opacity && bSubstrateOpacityOverrideAllowed);
+			return InProperty == MP_FrontMaterial || (InProperty == MP_Opacity && bStrataOpacityOverrideAllowed);
 		}
 		else
 		{
@@ -6998,7 +6769,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	else if (Domain == MD_LightFunction)
 	{
 		// light functions should already use MSM_Unlit but we also we don't want WorldPosOffset
-		if (bSubstrateEnabled)
+		if (bStrataEnabled)
 		{
 			return InProperty == MP_FrontMaterial;
 		}
@@ -7009,11 +6780,11 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	}
 	else if (Domain == MD_DeferredDecal)
 	{
-		if (bSubstrateEnabled)
+		if (bStrataEnabled)
 		{
 			return InProperty == MP_FrontMaterial
 				|| InProperty == MP_AmbientOcclusion
-				|| (InProperty == MP_Opacity && bSubstrateOpacityOverrideAllowed);
+				|| (InProperty == MP_Opacity && bStrataOpacityOverrideAllowed);
 		}
 		else if (InProperty >= MP_CustomizedUVs0 && InProperty <= MP_CustomizedUVs7)
 		{
@@ -7068,7 +6839,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	}
 	else if (Domain == MD_Volume)
 	{
-		if (bSubstrateEnabled)
+		if (bStrataEnabled)
 		{
 			return InProperty == MP_FrontMaterial;
 		}
@@ -7079,12 +6850,12 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	}
 	else if (Domain == MD_UI)
 	{
-		if (bSubstrateEnabled)
+		if (bStrataEnabled)
 		{
 			return InProperty == MP_FrontMaterial
 				|| (InProperty == MP_WorldPositionOffset)
 				|| (InProperty == MP_OpacityMask && IsMaskedBlendMode(BlendMode))
-				|| (InProperty == MP_Opacity && bSubstrateOpacityOverrideAllowed)
+				|| (InProperty == MP_Opacity && bStrataOpacityOverrideAllowed)
 				|| (InProperty >= MP_CustomizedUVs0 && InProperty <= MP_CustomizedUVs7);
 		}
 		else
@@ -7108,7 +6879,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 	
 	bool Active = true;
 
-	if (bSubstrateEnabled)
+	if (bStrataEnabled)
 	{
 		Active = false;
 		if (bIsSupported)
@@ -7120,7 +6891,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 				break;
 			case MP_Opacity:
 				// Opacity is used as alpha override for alpha composite blending. 
-				Active = bSubstrateOpacityOverrideAllowed;
+				Active = bStrataOpacityOverrideAllowed;
 				break;
 			case MP_OpacityMask:
 				Active = IsMaskedBlendMode(BlendMode);
@@ -7132,7 +6903,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 				Active = true;
 				break;
 			case MP_Displacement:
-				Active = bIsTessellationEnabled;
+				Active = true;
 				break;
 			case MP_PixelDepthOffset:
 				Active = (!bIsTranslucentBlendMode) || (bIsTranslucencyWritingVelocity);
@@ -7141,9 +6912,6 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 				Active = bIsThinSurface;
 				break;
 			case MP_FrontMaterial:
-				Active = true;
-				break;
-			case MP_MaterialAttributes:
 				Active = true;
 				break;
 			}
@@ -7206,12 +6974,14 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 			Active = ShadingModels.HasAnyShadingModel({ MSM_ClearCoat, MSM_Eye });
 			break;
 
-		//My-Add-30/05/24
-		case MP_SketchShadowUVScale: Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch, MSM_DefaultLit });
+//My-Add-SketchPipeline
+		case MP_SketchShadowUVScale:
+			Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch, MSM_DefaultLit });
 			break;
-		case MP_SketchColorMixing:Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch });
+		case MP_SketchColorMixing:
+			Active = ShadingModels.HasAnyShadingModel({ MSM_Sketch});
 			break;
-		//End
+//End-11/06/24
 
 		case MP_EmissiveColor:
 			// Emissive is always active, even for light functions and post process materials, 
@@ -7222,7 +6992,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 			Active = true;
 			break;
 		case MP_Displacement:
-			Active = bIsTessellationEnabled;
+			Active = true;
 			break;
 		case MP_PixelDepthOffset:
 			Active = (!bIsTranslucentBlendMode) || (bIsTranslucencyWritingVelocity);
@@ -7233,7 +7003,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
 		case MP_SurfaceThickness:
 		case MP_FrontMaterial:
 			{
-				Active = false;
+				Active = bStrataEnabled;
 				break;
 			}
 		case MP_MaterialAttributes:
@@ -7260,8 +7030,7 @@ bool UMaterial::IsPropertyActiveInEditor(EMaterialProperty InProperty) const
 		BlendMode,
 		ShadingModels,
 		TranslucencyLightingMode,
-		IsTessellationEnabled(),
-		IsPostProcessMaterialOutputingAlpha(),
+		BlendableOutputAlpha,
 		bUsesDistortion,
 		IsShadingModelFromMaterialExpression(),
 		IsTranslucencyWritingVelocity(),
@@ -7286,8 +7055,7 @@ bool UMaterial::IsPropertyActiveInDerived(EMaterialProperty InProperty, const UM
 		DerivedMaterial->GetBlendMode(),
 		DerivedMaterial->GetShadingModels(),
 		TranslucencyLightingMode,
-		DerivedMaterial->IsTessellationEnabled(),
-		IsPostProcessMaterialOutputingAlpha(),
+		BlendableOutputAlpha,
 		bUsesDistortion,
 		DerivedMaterial->IsShadingModelFromMaterialExpression(),
 		IsTranslucencyWritingVelocity(),
@@ -7461,23 +7229,12 @@ bool UMaterial::IsRefractionPinPluggedIn(const UMaterialEditorOnlyData* EditorOn
 UMaterialEditorOnlyData::UMaterialEditorOnlyData()
 {
 	BaseColor.Constant = FColor(128, 128, 128);
-	Metallic.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Metallic).X;
-	Specular.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Specular).X;
-	Roughness.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Roughness).X;
-	Anisotropy.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Anisotropy).X;
-	Normal.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Normal);
-	Tangent.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Tangent);
-	EmissiveColor.Constant = FLinearColor(FMaterialAttributeDefinitionMap::GetDefaultValue(MP_EmissiveColor)).ToFColorSRGB();
-	Opacity.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Opacity).X;
-	OpacityMask.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_OpacityMask).X;
-	WorldPositionOffset.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_WorldPositionOffset);
-	Displacement.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Displacement).X;
-	SubsurfaceColor.Constant = FLinearColor(FMaterialAttributeDefinitionMap::GetDefaultValue(MP_SubsurfaceColor)).ToFColorSRGB();
-	ClearCoat.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_CustomData0).X;
-	ClearCoatRoughness.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_CustomData1).X;
-	AmbientOcclusion.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_AmbientOcclusion).X;
-	Refraction.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_Refraction).X;
-	SurfaceThickness.Constant = FMaterialAttributeDefinitionMap::GetDefaultValue(MP_SurfaceThickness).X;
+	Metallic.Constant = 0.0f;
+	Specular.Constant = 0.5f;
+	Roughness.Constant = 0.5f;
+
+	Opacity.Constant = 1.0f;
+	OpacityMask.Constant = 1.0f;
 }
 
 #undef LOCTEXT_NAMESPACE
