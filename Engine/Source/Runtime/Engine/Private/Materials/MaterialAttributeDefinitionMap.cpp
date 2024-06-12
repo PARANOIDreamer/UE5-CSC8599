@@ -6,8 +6,8 @@
 #include "MaterialDomain.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionShadingModel.h"
-#include "Materials/MaterialExpressionSubstrate.h"
-#include "SubstrateDefinitions.h"
+#include "Materials/MaterialExpressionStrata.h"
+#include "StrataDefinitions.h"
 
 #define LOCTEXT_NAMESPACE "MaterialShared"
 
@@ -25,7 +25,7 @@ FMaterialAttributeDefintion::FMaterialAttributeDefintion(
 	, BlendFunction(InBlendFunction)
 	, bIsHidden(bInIsHidden)
 {
-	checkf(ValueType & MCT_Float || ValueType == MCT_ShadingModel || ValueType == MCT_Substrate || ValueType == MCT_MaterialAttributes, TEXT("Unsupported material attribute type %d"), ValueType);
+	checkf(ValueType & MCT_Float || ValueType == MCT_ShadingModel || ValueType == MCT_Strata || ValueType == MCT_MaterialAttributes, TEXT("Unsupported material attribute type %d"), ValueType);
 }
 
 int32 FMaterialAttributeDefintion::CompileDefaultValue(FMaterialCompiler* Compiler) const
@@ -66,8 +66,8 @@ int32 FMaterialAttributeDefintion::CompileDefaultValue(FMaterialCompiler* Compil
 
 	if (Property == MP_FrontMaterial)
 	{
-		check(ValueType == MCT_Substrate);
-		return Compiler->SubstrateCreateAndRegisterNullMaterial();
+		check(ValueType == MCT_Strata);
+		return Compiler->StrataCreateAndRegisterNullMaterial();
 	}
 
 	if (TexCoordIndex == INDEX_NONE)
@@ -261,7 +261,7 @@ void FMaterialAttributeDefinitionMap::InitializeAttributeMap()
 
 	// Advanced attributes
 	Add(FGuid(0xF905F895, 0xD5814314, 0x916D2434, 0x8C40CE9E), TEXT("WorldPositionOffset"),		MP_WorldPositionOffset,		MCT_Float3,	FVector4(0,0,0,0),	SF_Vertex);
-	Add(FGuid(0x199A7166, 0xC67041DC, 0xA68EAD0D, 0x7017D0AD), TEXT("Displacement"),			MP_Displacement,			MCT_Float,	FVector4(.5,0,0,0), SF_Pixel);
+	Add(FGuid(0x199A7166, 0xC67041DC, 0xA68EAD0D, 0x7017D0AD), TEXT("Displacement"),			MP_Displacement,			MCT_Float,	FVector4(0,0,0,0),	SF_Pixel);
 	Add(FGuid(0x5B8FC679, 0x51CE4082, 0x9D777BEE, 0xF4F72C44), TEXT("SubsurfaceColor"),			MP_SubsurfaceColor,			MCT_Float3,	FVector4(1,1,1,0),	SF_Pixel);
 	Add(FGuid(0x9E502E69, 0x3C8F48FA, 0x94645CFD, 0x28E5428D), TEXT("ClearCoat"),				MP_CustomData0,				MCT_Float,	FVector4(1,0,0,0),	SF_Pixel);
 	Add(FGuid(0xBE4F2FFD, 0x12FC4296, 0xB0124EEA, 0x12C28D92), TEXT("ClearCoatRoughness"),		MP_CustomData1,				MCT_Float,	FVector4(.1,0,0,0),	SF_Pixel);
@@ -269,8 +269,8 @@ void FMaterialAttributeDefinitionMap::InitializeAttributeMap()
 	Add(FGuid(0xD0B0FA03, 0x14D74455, 0xA851BAC5, 0x81A0788B), TEXT("Refraction"),				MP_Refraction,				MCT_Float3,	FVector4(1,0,0,0),	SF_Pixel);
 	Add(FGuid(0x0AC97EC3, 0xE3D047BA, 0xB610167D, 0xC4D919FF), TEXT("PixelDepthOffset"),		MP_PixelDepthOffset,		MCT_Float,	FVector4(0,0,0,0),	SF_Pixel);
 	Add(FGuid(0xD9423FFF, 0xD77E4D82, 0x8FF9CF5E, 0x055D1255), TEXT("ShadingModel"),			MP_ShadingModel,			MCT_ShadingModel, FVector4(0, 0, 0, 0), SF_Pixel, INDEX_NONE, false, &CompileShadingModelBlendFunction);
-	Add(FGuid(0x42BDD2E0, 0xBE714189, 0xA0984BC3, 0xDD0BE872), TEXT("SurfaceThickness"),		MP_SurfaceThickness,		MCT_Float,  FVector4(SUBSTRATE_LAYER_DEFAULT_THICKNESS_CM, 0, 0, 0), SF_Pixel);
-	Add(FGuid(0x5973A03E, 0x13A74E08, 0x92D0CEDD, 0xF2936CF8), TEXT("FrontMaterial"),			MP_FrontMaterial,			MCT_Substrate, FVector4(0,0,0,0),	SF_Pixel, INDEX_NONE, false, &CompileSubstrateBlendFunction);
+	Add(FGuid(0x42BDD2E0, 0xBE714189, 0xA0984BC3, 0xDD0BE872), TEXT("SurfaceThickness"),		MP_SurfaceThickness,		MCT_Float,  FVector4(STRATA_LAYER_DEFAULT_THICKNESS_CM, 0, 0, 0), SF_Pixel);
+	Add(FGuid(0x5973A03E, 0x13A74E08, 0x92D0CEDD, 0xF2936CF8), TEXT("FrontMaterial"),			MP_FrontMaterial,			MCT_Strata, FVector4(0,0,0,0),	SF_Pixel, INDEX_NONE, false, &CompileStrataBlendFunction);
 
 	// Used when compiling material with execution pins, which are compiling all attributes together
 	Add(FGuid(0xE0ED040B, 0x82794D93, 0xBD2D59B2, 0xA5BBF41C), TEXT("MaterialAttributes"),		MP_MaterialAttributes,		MCT_MaterialAttributes, FVector4(0,0,0,0), SF_Pixel, INDEX_NONE, bHideAttribute);
@@ -302,10 +302,10 @@ void FMaterialAttributeDefinitionMap::InitializeAttributeMap()
 	AddCustomAttribute(FGuid(0x8EAB2CB2, 0x73634A24, 0x8CD14F47, 0x3F9C8E55), "CustomEyeTangent", "GetTangentOutput", MCT_Float3, FVector4(0, 0, 0, 0));
 	AddCustomAttribute(FGuid(0xF2D8C70E, 0x42ECA0D1, 0x4652D0AD, 0xB785A065), "TransmittanceColor", "GetThinTranslucentMaterialOutput", MCT_Float3, FVector4(0.5, 0.5, 0.5, 0));
 
-	//My-Add-30/05/24
-	Add(FGuid(0x68934E1B, 0xB59248EE, 0x8E2CD578, 0x1F72D8D1), TEXT("SketchShadowUVScale"), MP_SketchShadowUVScale, MCT_Float, FVector4(0, 0, 0, 0), SF_Pixel);
-	Add(FGuid(0x68934E1B, 0xC456450D, 0x9C39C933, 0xD371926D), TEXT("SketchColorMixing"), MP_SketchColorMixing, MCT_Float, FVector4(0, 0, 0, 0), SF_Pixel);
-	//End
+//My-Add-SketchPipeline
+	Add(FGuid(0x68934E1B, 0xB59248EE, 0x8E2CD578, 0x2B0C403C), TEXT("SketchShadowUVScale"), MP_SketchShadowUVScale, MCT_Float, FVector4(0, 0, 0, 0), SF_Pixel);
+	Add(FGuid(0x68934E1B, 0xC456450D, 0x9C39C933, 0xDF2F626C), TEXT("SketchColorMixing"), MP_SketchColorMixing, MCT_Float, FVector4(0, 0, 0, 0), SF_Pixel);
+//End-11/06/24
 }
 
 void FMaterialAttributeDefinitionMap::Add(const FGuid& AttributeID, const FString& AttributeName, EMaterialProperty Property,
@@ -359,14 +359,14 @@ FText FMaterialAttributeDefinitionMap::GetAttributeOverrideForMaterial(const FGu
 	EMaterialProperty Property = GMaterialPropertyAttributesMap.Find(AttributeID)->Property;
 
 	static const IConsoleVariable* SubstrateCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.substrate"));
-	const bool bSubstrateEnabled = (SubstrateCVar && SubstrateCVar->GetInt() != 0);
+	const bool bStrataEnabled = (SubstrateCVar && SubstrateCVar->GetInt() != 0);
 
 	switch (Property)
 	{
 	case MP_EmissiveColor:
 		return Material->IsUIMaterial() ? LOCTEXT("UIOutputColor", "Final Color") : LOCTEXT("EmissiveColor", "Emissive Color");
 	case MP_Opacity:
-		return bSubstrateEnabled ? LOCTEXT("OpacityOverride", "Opacity Override") : LOCTEXT("Opacity", "Opacity");
+		return bStrataEnabled ? LOCTEXT("OpacityOverride", "Opacity Override") : LOCTEXT("Opacity", "Opacity");
 	case MP_OpacityMask:
 		return LOCTEXT("OpacityMask", "Opacity Mask");
 	case MP_DiffuseColor:
@@ -376,9 +376,9 @@ FText FMaterialAttributeDefinitionMap::GetAttributeOverrideForMaterial(const FGu
 	case MP_BaseColor:
 		return Material->MaterialDomain == MD_Volume ? LOCTEXT("Albedo", "Albedo") : LOCTEXT("BaseColor", "Base Color");
 	case MP_Metallic:
-		CustomPinNames.Add({ MSM_Hair, LOCTEXT("Scatter", "Scatter").ToString()});
-		CustomPinNames.Add({ MSM_Eye, LOCTEXT("Curvature", "Curvature").ToString()});
-		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("Metallic", "Metallic").ToString()));
+		CustomPinNames.Add({ MSM_Hair, "Scatter" });
+		CustomPinNames.Add({ MSM_Eye, "Curvature" });
+		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, "Metallic"));
 	case MP_Specular:
 		return LOCTEXT("Specular", "Specular");
 	case MP_Roughness:
@@ -386,8 +386,8 @@ FText FMaterialAttributeDefinitionMap::GetAttributeOverrideForMaterial(const FGu
 	case MP_Anisotropy:
 		return LOCTEXT("Anisotropy", "Anisotropy");
 	case MP_Normal:
-		CustomPinNames.Add({ MSM_Hair, LOCTEXT("Tangent", "Tangent").ToString() });
-		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("Normal", "Normal").ToString()));
+		CustomPinNames.Add({ MSM_Hair, "Tangent" });
+		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, "Normal"));
 	case MP_Tangent:
 		return LOCTEXT("Tangent", "Tangent");
 	case MP_WorldPositionOffset:
@@ -403,25 +403,26 @@ FText FMaterialAttributeDefinitionMap::GetAttributeOverrideForMaterial(const FGu
 		{
 			return LOCTEXT("Extinction", "Extinction");
 		}
-		CustomPinNames.Add({ MSM_Cloth, LOCTEXT("FuzzColor", "Fuzz Color").ToString() });
-		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("SubsurfaceColor", "Subsurface Color").ToString()));
+		CustomPinNames.Add({ MSM_Cloth, "Fuzz Color" });
+		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, "Subsurface Color"));
 	case MP_CustomData0:
-		CustomPinNames.Add({ MSM_ClearCoat, LOCTEXT("ClearCoat", "Clear Coat").ToString() });
-		CustomPinNames.Add({ MSM_Hair, LOCTEXT("Backlit", "Backlit").ToString() });
-		CustomPinNames.Add({ MSM_Cloth, LOCTEXT("Cloth", "Cloth").ToString() });
-		CustomPinNames.Add({ MSM_Eye, LOCTEXT("IrisMask", "Iris Mask").ToString() });
-		CustomPinNames.Add({ MSM_SubsurfaceProfile, LOCTEXT("Curvature", "Curvature").ToString() });
-		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("CustomData0", "Custom Data 0").ToString()));
+		CustomPinNames.Add({ MSM_ClearCoat, "Clear Coat" });
+		CustomPinNames.Add({ MSM_Hair, "Backlit" });
+		CustomPinNames.Add({ MSM_Cloth, "Cloth" });
+		CustomPinNames.Add({ MSM_Eye, "Iris Mask" });
+		CustomPinNames.Add({ MSM_SubsurfaceProfile, "Curvature" });
+		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, "Custom Data 0"));
 	case MP_CustomData1:
-		CustomPinNames.Add({ MSM_ClearCoat, LOCTEXT("ClearCoatRoughness", "Clear Coat Roughness").ToString() });
-		CustomPinNames.Add({ MSM_Eye, LOCTEXT("IrisDistance", "Iris Distance").ToString() });
-		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("CustomData1", "Custom Data 1").ToString()));
+		CustomPinNames.Add({ MSM_ClearCoat, "Clear Coat Roughness" });
+		CustomPinNames.Add({ MSM_Eye, "Iris Distance" });
+		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, "Custom Data 1"));
 	
-	//My-Add-30/05/24
+//My-Add-SketchPipeline
 	case MP_SketchShadowUVScale:
 		return LOCTEXT("SketchShadowUVScale", "Sketch Shadow UV Scale");
 	case MP_SketchColorMixing:
 		return LOCTEXT("SketchColorMixing", "Sketch Color Mixing");
+//End-11/06/24
 	
 	case MP_AmbientOcclusion:
 		return LOCTEXT("AmbientOcclusion", "Ambient Occlusion");
@@ -566,19 +567,6 @@ const FMaterialCustomOutputAttributeDefintion* FMaterialAttributeDefinitionMap::
 	for (auto& Attribute : GMaterialPropertyAttributesMap.CustomAttributes)
 	{
 		if (Attribute.AttributeName == AttributeName)
-		{
-			return &Attribute;
-		}
-	}
-
-	return nullptr;
-}
-
-const FMaterialCustomOutputAttributeDefintion* FMaterialAttributeDefinitionMap::GetCustomAttribute(const FGuid& AttributeID)
-{
-	for (auto& Attribute : GMaterialPropertyAttributesMap.CustomAttributes)
-	{
-		if (Attribute.AttributeID == AttributeID)
 		{
 			return &Attribute;
 		}
