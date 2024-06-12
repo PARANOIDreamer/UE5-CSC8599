@@ -22,10 +22,10 @@ void SetGBufferForShadingModel(
 	const float SubsurfaceProfile,
 	const float Dither,
 
-//My-Add-04/06/24
+//My-Add-SketchPipeline
 	const float SketchShadowUVScale,
 	const float SketchColorMixing,
-//End
+//End-11/06/24
 
 	const uint ShadingModel)
 {
