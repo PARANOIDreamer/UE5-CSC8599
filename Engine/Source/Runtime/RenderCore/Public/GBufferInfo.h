@@ -40,6 +40,11 @@ enum EGBufferSlot
 	GBS_SubsurfaceProfileX, // R8
 	GBS_IrisNormal, // RG8
 	GBS_SeparatedMainDirLight, // RGB 11.11.10
+
+//My-Add-SketchPipeline
+	GBS_SketchData,
+//End-14/06/24
+
 	GBS_Num
 };
 
@@ -276,12 +281,22 @@ struct FGBufferBindings
 	FGBufferBinding GBufferC;
 	FGBufferBinding GBufferD;
 	FGBufferBinding GBufferE;
+
+//My-Add-SketchPipeline
+	FGBufferBinding GBufferG;
+//End-14/06/24
+
 	FGBufferBinding GBufferVelocity;
 };
 
 struct FGBufferInfo
 {
+//My-Change-SketchPipeline
+	/*primitive
 	static const int MaxTargets = 8;
+	*/
+	static const int MaxTargets = 9;
+//End-14/06/24
 
 	int32 NumTargets;
 	FGBufferTarget Targets[MaxTargets];
