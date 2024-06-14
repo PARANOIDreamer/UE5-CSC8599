@@ -749,7 +749,11 @@ public:
 			IsSceneTextureUsed(PPI_ShadingModelID) ||
 			IsSceneTextureUsed(PPI_StoredBaseColor) ||
 			IsSceneTextureUsed(PPI_StoredSpecular) ||
-			IsSceneTextureUsed(PPI_Velocity);
+			IsSceneTextureUsed(PPI_Velocity) ||
+
+//My-Add-SketchPipeline
+			IsSceneTextureUsed(PPI_SketchData);
+//End-14/06/24
 	}
 
 	/** true if the material uses the SceneDepth lookup */
