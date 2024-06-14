@@ -250,6 +250,11 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 	int32 TargetGBufferD = -1;
 	int32 TargetGBufferE = -1;
 	int32 TargetGBufferF = -1;
+
+//My-Add-SketchPipeline
+	int32 TargetGBufferG = -1;
+//End-14/06/24
+
 	int32 TargetVelocity = -1;
 	int32 TargetSeparatedMainDirLight = -1;
 
@@ -327,6 +332,10 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 		Info.NumTargets = Params.bHasPrecShadowFactor ? 7 : 6;
 	}
 
+//My-Add-SketchPipeline
+	Info.NumTargets += 1;
+//End-14/06/24
+
 	// good to see the quality loss due to precision in the gbuffer
 	const bool bHighPrecisionGBuffers = (Params.LegacyFormatIndex >= EGBufferFormat_Force16BitsPerChannel);
 	// good to profile the impact of non 8 bit formats
@@ -370,6 +379,11 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 			Info.Targets[5].Init(GBT_Unorm_8_8_8_8, TEXT("GBufferE"), false, true, true, true);
 			TargetSeparatedMainDirLight = 6;
 		}
+
+//My-Add-SketchPipeline
+		TargetGBufferG = TargetGBufferE == -1 ? 5 : TargetGBufferE + 1;
+//End-14/06/24
+
 	}
 	else if (Params.bHasVelocity)
 	{
@@ -387,6 +401,11 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 			Info.Targets[6].Init(GBT_Unorm_8_8_8_8, TEXT("GBufferE"), false, true, true, false);
 			TargetSeparatedMainDirLight = 7;
 		}
+
+//My-Add-SketchPipeline
+		TargetGBufferG = TargetGBufferE == -1 ? 6 : TargetGBufferE + 1;
+//Emd-14/06/24
+
 	}
 	else if (Params.bHasTangent)
 	{
@@ -401,12 +420,21 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 			Info.Targets[6].Init(GBT_Unorm_8_8_8_8, TEXT("GBufferE"), false, true, true, true);
 			TargetSeparatedMainDirLight = 7;
 		}
+
+//My-Add-SketchPipeline
+		TargetGBufferG = TargetGBufferE == -1 ? 6 : TargetGBufferE + 1;
+//End-14/06/24
+
 	}
 	else
 	{
 		// should never hit this path
 		check(0);
 	}
+
+//My-Add-SketchPipeline
+	Info.Targets[TargetGBufferG].Init(GBT_Unorm_8_8_8_8, TEXT("GBufferG"), false, true, true, true);
+//End-14/06/24
 
 	// this value isn't correct, because it doesn't respect the scene color format cvar, but it's ignored anyways
 	// so it's ok for now
@@ -534,6 +562,14 @@ FGBufferInfo RENDERCORE_API FetchLegacyGBufferInfo(const FGBufferParams& Params)
 	Info.Slots[GBS_CustomData].Packing[2] = FGBufferPacking(TargetGBufferD, 2, 2);
 	Info.Slots[GBS_CustomData].Packing[3] = FGBufferPacking(TargetGBufferD, 3, 3);
 
+//My-Add-SketchPipeline
+	Info.Slots[GBS_SketchData] = FGBufferItem(GBS_SketchData, GBC_Raw_Unorm_8_8_8_8, GBCH_Both);
+	Info.Slots[GBS_SketchData].Packing[0] = FGBufferPacking(TargetGBufferG, 0, 0);
+	Info.Slots[GBS_SketchData].Packing[1] = FGBufferPacking(TargetGBufferG, 1, 1);
+	Info.Slots[GBS_SketchData].Packing[2] = FGBufferPacking(TargetGBufferG, 2, 2);
+	Info.Slots[GBS_SketchData].Packing[3] = FGBufferPacking(TargetGBufferG, 3, 3);
+//End-14/06/24
+	
 	// Special water output
 	if (Params.bHasSingleLayerWaterSeparatedMainLight)
 	{
