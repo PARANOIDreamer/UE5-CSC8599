@@ -231,12 +231,20 @@ static void SetupMobileGBufferFlags(FGBufferBindings GBufferBindings[GBL_Num], b
 		Bindings.GBufferD.Flags |= AddFlags;
 		Bindings.GBufferE.Flags |= AddFlags;
 
+//My-Add-SketchPipeline
+		Bindings.GBufferG.Flags |= AddFlags;
+//End-14/06/24
+
 		// Mobile uses FBF/subpassLoad to fetch data from GBuffer, and FBF does not always work with sRGB targets 
 		Bindings.GBufferA.Flags &= (~TexCreate_SRGB);
 		Bindings.GBufferB.Flags &= (~TexCreate_SRGB);
 		Bindings.GBufferC.Flags &= (~TexCreate_SRGB);
 		Bindings.GBufferD.Flags &= (~TexCreate_SRGB);
 		Bindings.GBufferE.Flags &= (~TexCreate_SRGB);
+
+//My-Add-SketchPipeline
+		Bindings.GBufferG.Flags &= (~TexCreate_SRGB);
+//End-14/06/24
 
 		// Input attachments with PF_R8G8B8A8 has better support on mobile than PF_B8G8R8A8
 		auto OverrideB8G8R8A8 = [](FGBufferBinding& Binding) { if (Binding.Format == PF_B8G8R8A8) Binding.Format = PF_R8G8B8A8; };
@@ -245,6 +253,10 @@ static void SetupMobileGBufferFlags(FGBufferBindings GBufferBindings[GBL_Num], b
 		OverrideB8G8R8A8(Bindings.GBufferC);
 		OverrideB8G8R8A8(Bindings.GBufferD);
 		OverrideB8G8R8A8(Bindings.GBufferE);
+
+//My-Add-SketchPipeline
+		OverrideB8G8R8A8(Bindings.GBufferG);
+//End-14/06/24
 	}
 }
 
@@ -293,6 +305,11 @@ void FSceneTexturesConfig::Init(const FSceneTexturesConfigInitSettings& InitSett
 				BindingCache.Bindings[Layout].GBufferC = FindGBufferBindingByName(GBufferInfo, TEXT("GBufferC"));
 				BindingCache.Bindings[Layout].GBufferD = FindGBufferBindingByName(GBufferInfo, TEXT("GBufferD"));
 				BindingCache.Bindings[Layout].GBufferE = FindGBufferBindingByName(GBufferInfo, TEXT("GBufferE"));
+
+//My-Add-SketchPipeline
+				BindingCache.Bindings[Layout].GBufferG = FindGBufferBindingByName(GBufferInfo, TEXT("GBufferG"));
+//End-14/06/24
+
 				BindingCache.Bindings[Layout].GBufferVelocity = FindGBufferBindingByName(GBufferInfo, TEXT("Velocity"));
 			}
 
@@ -354,6 +371,11 @@ uint32 FSceneTexturesConfig::GetGBufferRenderTargetsInfo(FGraphicsPipelineRender
 		IncludeBindingIfValid(Bindings.GBufferC);
 		IncludeBindingIfValid(Bindings.GBufferD);
 		IncludeBindingIfValid(Bindings.GBufferE);
+
+//My-Add-SketchPipeline
+		IncludeBindingIfValid(Bindings.GBufferG);
+//End-14/06/24
+
 		IncludeBindingIfValid(Bindings.GBufferVelocity);
 	}
 	// Forward shading path. Simple forward shading does not use velocity.
