@@ -15,6 +15,11 @@ BEGIN_SHADER_PARAMETER_STRUCT(FPixelInspectorParameters, )
 	RDG_TEXTURE_ACCESS(GBufferD, ERHIAccess::CopySrc)
 	RDG_TEXTURE_ACCESS(GBufferE, ERHIAccess::CopySrc)
 	RDG_TEXTURE_ACCESS(GBufferF, ERHIAccess::CopySrc)
+
+//My-Add-SketchPipeline
+	RDG_TEXTURE_ACCESS(GBufferG, ERHIAccess::CopySrc)
+//End-14/06/24
+
 	RDG_TEXTURE_ACCESS(SceneColor, ERHIAccess::CopySrc)
 	RDG_TEXTURE_ACCESS(SceneColorBeforeTonemap, ERHIAccess::CopySrc)
 	RDG_TEXTURE_ACCESS(SceneDepth, ERHIAccess::CopySrc)
@@ -254,6 +259,21 @@ void ProcessPixelInspectorRequests(
 						RHICmdList.CopyTexture(SourceBufferF, DestinationBufferBCDEF, CopyInfo);
 					}
 				}
+
+//My-Add-SketchPipeline
+				if (Parameters.GBufferG)
+				{
+					FRHITexture* SourceBufferG = Parameters.GBufferG->GetRHI();
+					if (DestinationBufferBCDEF->GetFormat() == SourceBufferG->GetFormat())
+					{
+						FRHICopyTextureInfo CopyInfo;
+						CopyInfo.SourcePosition = SourcePoint;
+						CopyInfo.Size = FIntVector(1, 1, 1);
+						RHICmdList.CopyTexture(SourceBufferG, DestinationBufferBCDEF, CopyInfo);
+					}
+				}
+//End-14/06/24
+
 			}
 
 			PixelInspectorRequest->RenderingCommandSend = true;
@@ -295,6 +315,11 @@ FScreenPassTexture AddPixelInspectorPass(FRDGBuilder& GraphBuilder, const FViewI
 		PassParameters->GBufferD = SceneTextures.GBufferDTexture;
 		PassParameters->GBufferE = SceneTextures.GBufferETexture;
 		PassParameters->GBufferF = SceneTextures.GBufferFTexture;
+
+//My-Add-SketchPipeline
+		PassParameters->GBufferG = SceneTextures.GBufferGTexture;
+//End-14/06/24
+
 		PassParameters->SceneColor = Inputs.SceneColor.Texture;
 		PassParameters->SceneColorBeforeTonemap = Inputs.SceneColorBeforeTonemap.Texture;
 		PassParameters->SceneDepth = SceneTextures.SceneDepthTexture;
