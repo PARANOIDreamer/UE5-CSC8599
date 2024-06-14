@@ -456,6 +456,12 @@ static FString GetSlotTextName(EGBufferSlot Slot)
 		return TEXT("IrisNormal");
 	case GBS_SeparatedMainDirLight:
 		return TEXT("SeparatedMainDirLight");
+
+//My-Add-SketchPipeline
+	case GBS_SketchData:
+		return TEXT("SketchData");
+//End-14/06/24
+
 	default:
 		break;
 	};
@@ -1733,6 +1739,11 @@ static void DetermineUsedMaterialSlots(
 	if (Mat.MATERIAL_SHADINGMODEL_DEFAULT_LIT)
 	{
 		SetStandardGBufferSlots(Slots, bWriteEmissive, bHasTangent, bHasVelocity, bHasStaticLighting, bIsStrataMaterial);
+	
+//My-Add-SketchPipeline
+		Slots[GBS_SketchData] = bUseCustomData;
+//End-14/06/24
+
 	}
 
 	if (Mat.MATERIAL_SHADINGMODEL_SUBSURFACE)
@@ -1792,6 +1803,15 @@ static void DetermineUsedMaterialSlots(
 			Slots[GBS_SeparatedMainDirLight] = true;
 		}
 	}
+
+//My-Add-SketchPipeline
+	if (Mat.MATERIAL_SHADINGMODEL_SKETCH)
+	{
+		SetStandardGBufferSlots(Slots, bWriteEmissive, bHasTangent, bHasVelocity, bHasStaticLighting, bIsStrataMaterial);
+		Slots[GBS_CustomData] = bUseCustomData;
+		Slots[GBS_SketchData] = bUseCustomData;
+	}
+//End-14/06/24
 
 	// doesn't write to GBuffer
 	if (Mat.MATERIAL_SHADINGMODEL_THIN_TRANSLUCENT)
