@@ -208,3 +208,31 @@ void SetGBufferForShadingModel(
 	}
 #endif
 }
+
+//My-Add-SketchPipeline
+#if MATERIAL_SHADINGMODEL_SKETCH
+	else if (ShadingModel == SHADINGMODELID_SKETCH)
+	{
+		GBuffer.SketchData.z = SketchColorMixing;
+		GBuffer.SketchData.w = 1.0;
+	}
+#endif	
+
+	float UVScale = SketchShadowUVScale;
+	UVScale = clamp(UVScale, 0.001, 1000);
+
+#if NUM_TEX_COORD_INTERPOLATORS
+	float2 uv = MaterialParameters.TexCoords[0];
+
+	uv = frac(uv * UVScale);
+	GBuffer.SketchData.xy = uv.xy;
+#else
+	float3 AbsoluteWorldPosition = LWCToFloat(MaterialParameters.AbsoluteWorldPosition);
+
+	float2 uv = lerp(float2(0, 0), AbsoluteWorldPosition.xy, abs(dot(float3(0, 0, 1), MaterialParameters.WorldNormal)));
+	uv = lerp(uv, AbsoluteWorldPosition.xz, abs(dot(float3(0, 1, 0), MaterialParameters.WorldNormal)));
+	uv = lerp(uv, AbsoluteWorldPosition.yz, abs(dot(float3(1, 0, 0), MaterialParameters.WorldNormal)));
+
+	GBuffer.SketchData.xy = frac((uv) / (100.0 / UVScale));
+#endif			
+	//End-14/06/24
