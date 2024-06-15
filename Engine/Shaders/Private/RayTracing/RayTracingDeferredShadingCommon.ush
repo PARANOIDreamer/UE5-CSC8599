@@ -15,6 +15,10 @@ FGBufferData GetGBufferDataFromSceneTexturesLoad(uint2 PixelCoord, bool bGetNorm
 	float4 GBufferE = GBufferETexture.Load(int3(PixelCoord, 0));
 	float4 GBufferF = GBufferFTexture.Load(int3(PixelCoord, 0));
 
+//My-Add-SketchPipeline
+	float4 GBufferG = GBufferGTexture.Load(int3(PixelCoord, 0));
+//End-14/06/24
+
 #if GBUFFER_HAS_VELOCITY
 	float4 GBufferVelocity = GBufferVelocityTexture.Load(int3(PixelCoord, 0));
 #else
@@ -28,7 +32,12 @@ FGBufferData GetGBufferDataFromSceneTexturesLoad(uint2 PixelCoord, bool bGetNorm
 
 	float SceneDepth = ConvertFromDeviceZ(DeviceZ);
 
+//My-Change-SketchPipeline
+	/*primitive
 	return DecodeGBufferData(GBufferA, GBufferB, GBufferC, GBufferD, GBufferE, GBufferF, GBufferVelocity, CustomNativeDepth, CustomStencil, SceneDepth, bGetNormalizedNormal, CheckerFromPixelPos(PixelCoord));
+	*/
+	return DecodeGBufferData(GBufferA, GBufferB, GBufferC, GBufferD, GBufferE, GBufferF, GBufferG, GBufferVelocity, CustomNativeDepth, CustomStencil, SceneDepth, bGetNormalizedNormal, CheckerFromPixelPos(PixelCoord));
+//End-14/06/24
 }
 
 FGBufferData GetGBufferDataFromPayload(in FMaterialClosestHitPayload Payload)
