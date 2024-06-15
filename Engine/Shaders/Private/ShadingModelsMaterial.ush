@@ -10,7 +10,7 @@
 #define SUBSURFACE_PROFILE_OPACITY_THRESHOLD 1
 
 void SetGBufferForShadingModel(
-	in out FGBufferData GBuffer, 
+	in out FGBufferData GBuffer,
 	in out FMaterialPixelParameters MaterialParameters,
 	const float Opacity,
 	const half3 BaseColor,
@@ -22,10 +22,10 @@ void SetGBufferForShadingModel(
 	const float SubsurfaceProfile,
 	const float Dither,
 
-//My-Add-SketchPipeline
+	//My-Add-SketchPipeline
 	const float SketchShadowUVScale,
 	const float SketchColorMixing,
-//End-11/06/24
+	//End-11/06/24
 
 	const uint ShadingModel)
 {
@@ -39,7 +39,7 @@ void SetGBufferForShadingModel(
 	GBuffer.ShadingModelID = ShadingModel;
 
 	// Calculate and set custom data for the shading models that need it
-	
+
 	// Dummy initial if statement to play nicely with the #ifdef logic
 	if (false)
 	{
@@ -62,64 +62,64 @@ void SetGBufferForShadingModel(
 	else if (ShadingModel == SHADINGMODELID_SUBSURFACE_PROFILE)
 	{
 		// Optimization: if opacity is 0 then revert to default shading model 
-	#if SUBSURFACE_PROFILE_OPACITY_THRESHOLD
+#if SUBSURFACE_PROFILE_OPACITY_THRESHOLD
 		if (Opacity > SSSS_OPACITY_THRESHOLD_EPS)
-	#endif
+#endif
 		{
 			GBuffer.CustomData.rgb = EncodeSubsurfaceProfile(SubsurfaceProfile);
 			GBuffer.CustomData.a = Opacity;
 
-		#if SHADING_PATH_MOBILE
-			#if MATERIAL_SUBSURFACE_PROFILE_USE_CURVATURE
-				GBuffer.Curvature = GetMaterialCustomData0(MaterialParameters);
-			#else
-				GBuffer.Curvature = CalculateCurvature(GBuffer.WorldNormal, MaterialParameters.WorldPosition_CamRelative);
-			#endif
+#if SHADING_PATH_MOBILE
+#if MATERIAL_SUBSURFACE_PROFILE_USE_CURVATURE
+			GBuffer.Curvature = GetMaterialCustomData0(MaterialParameters);
+#else
+			GBuffer.Curvature = CalculateCurvature(GBuffer.WorldNormal, MaterialParameters.WorldPosition_CamRelative);
+#endif
 
 			GBuffer.Curvature = clamp(GBuffer.Curvature, 0.001f, 1.0f);
-		#endif
+#endif
 		}
-	#if SUBSURFACE_PROFILE_OPACITY_THRESHOLD
+#if SUBSURFACE_PROFILE_OPACITY_THRESHOLD
 		else
 		{
 			GBuffer.ShadingModelID = SHADINGMODELID_DEFAULT_LIT;
 			GBuffer.CustomData = 0;
 		}
-	#endif
+#endif
 	}
 #endif
 #if MATERIAL_SHADINGMODEL_CLEAR_COAT
 	else if (ShadingModel == SHADINGMODELID_CLEAR_COAT)
 	{
-		float ClearCoat				= saturate( GetMaterialCustomData0(MaterialParameters) );
-		float ClearCoatRoughness	= saturate( GetMaterialCustomData1(MaterialParameters) );
+		float ClearCoat = saturate(GetMaterialCustomData0(MaterialParameters));
+		float ClearCoatRoughness = saturate(GetMaterialCustomData1(MaterialParameters));
 		GBuffer.CustomData.x = ClearCoat;
 		GBuffer.CustomData.y = ClearCoatRoughness;
 
 		// Clamp roughness to guarantee functional inverse when computing SphereSinAlpha for multiple layers
 		GBuffer.Roughness = clamp(GBuffer.Roughness, 0.0, 254.0 / 255.0);
 
-	#if CLEAR_COAT_BOTTOM_NORMAL
+#if CLEAR_COAT_BOTTOM_NORMAL
 		{
 			float2 oct2 = UnitVectorToOctahedron(GBuffer.WorldNormal);
 
-			#if NUM_MATERIAL_OUTPUTS_CLEARCOATBOTTOMNORMAL > 0
-				#if MATERIAL_TANGENTSPACENORMAL
-					float3 tempnormal = normalize(TransformTangentVectorToWorld( MaterialParameters.TangentToWorld, ClearCoatBottomNormal0(MaterialParameters) ));
-				#else
-					float3 tempnormal =  ClearCoatBottomNormal0(MaterialParameters);
-				#endif
+#if NUM_MATERIAL_OUTPUTS_CLEARCOATBOTTOMNORMAL > 0
+#if MATERIAL_TANGENTSPACENORMAL
+			float3 tempnormal = normalize(TransformTangentVectorToWorld(MaterialParameters.TangentToWorld, ClearCoatBottomNormal0(MaterialParameters)));
+#else
+			float3 tempnormal = ClearCoatBottomNormal0(MaterialParameters);
+#endif
 
-				float2 oct1 = UnitVectorToOctahedron(tempnormal);
-				float2 oct3 = ( (oct1 - oct2) *  0.25 ) + (128.0/255.0);
-				GBuffer.CustomData.a = oct3.x;
-				GBuffer.CustomData.z = oct3.y;
-			#else
-				GBuffer.CustomData.a = 128.0/255.0;
-				GBuffer.CustomData.z = 128.0/255.0;
-			#endif
+			float2 oct1 = UnitVectorToOctahedron(tempnormal);
+			float2 oct3 = ((oct1 - oct2) * 0.25) + (128.0 / 255.0);
+			GBuffer.CustomData.a = oct3.x;
+			GBuffer.CustomData.z = oct3.y;
+#else
+			GBuffer.CustomData.a = 128.0 / 255.0;
+			GBuffer.CustomData.z = 128.0 / 255.0;
+#endif
 		}
-	#endif
+#endif
 	}
 #endif
 #if MATERIAL_SHADINGMODEL_TWOSIDED_FOLIAGE
@@ -132,84 +132,83 @@ void SetGBufferForShadingModel(
 #if MATERIAL_SHADINGMODEL_HAIR
 	else if (ShadingModel == SHADINGMODELID_HAIR)
 	{
-		GBuffer.CustomData.xy = UnitVectorToOctahedron( MaterialParameters.WorldNormal ) * 0.5 + 0.5;
-		GBuffer.CustomData.z = saturate( GetMaterialCustomData0(MaterialParameters) );	// Backlit
+		GBuffer.CustomData.xy = UnitVectorToOctahedron(MaterialParameters.WorldNormal) * 0.5 + 0.5;
+		GBuffer.CustomData.z = saturate(GetMaterialCustomData0(MaterialParameters));	// Backlit
 	}
 #endif
 #if MATERIAL_SHADINGMODEL_CLOTH
 	else if (ShadingModel == SHADINGMODELID_CLOTH)
 	{
 		GBuffer.CustomData.rgb = EncodeSubsurfaceColor(SubsurfaceColor);
-		GBuffer.CustomData.a = saturate( GetMaterialCustomData0(MaterialParameters) );	// Cloth
+		GBuffer.CustomData.a = saturate(GetMaterialCustomData0(MaterialParameters));	// Cloth
 		GBuffer.IndirectIrradiance *= 1 - GBuffer.CustomData.a;
 	}
 #endif
 #if MATERIAL_SHADINGMODEL_EYE
 	else if (ShadingModel == SHADINGMODELID_EYE)
 	{
-		const float IrisMask     = saturate(GetMaterialCustomData0(MaterialParameters));
+		const float IrisMask = saturate(GetMaterialCustomData0(MaterialParameters));
 		const float IrisDistance = saturate(GetMaterialCustomData1(MaterialParameters));
 
 		GBuffer.CustomData.x = EncodeSubsurfaceProfile(SubsurfaceProfile).x;
 		GBuffer.CustomData.w = 1.0f - IrisMask;	// Opacity
 
-	#if IRIS_NORMAL
-		float2 WorldNormalOct = UnitVectorToOctahedron( GBuffer.WorldNormal );
+#if IRIS_NORMAL
+		float2 WorldNormalOct = UnitVectorToOctahedron(GBuffer.WorldNormal);
 
 		// CausticNormal stored as octahedron
-		#if NUM_MATERIAL_OUTPUTS_GETTANGENTOUTPUT > 0
-			// Blend in the negative intersection normal to create some concavity
-			// Not great as it ties the concavity to the convexity of the cornea surface
-			// No good justification for that. On the other hand, if we're just looking to
-			// introduce some concavity, this does the job.
-			float3 PlaneNormal = normalize( GetTangentOutput0(MaterialParameters) );
-			float3 CausticNormal = normalize( lerp( PlaneNormal, -GBuffer.WorldNormal, IrisMask*IrisDistance ) );
-			float2 CausticNormalOct  = UnitVectorToOctahedron( CausticNormal );
-			float2 CausticNormalDelta = ( CausticNormalOct - WorldNormalOct ) * 0.5 + (128.0/255.0);
-			GBuffer.Metallic = CausticNormalDelta.x;
-			GBuffer.Specular = CausticNormalDelta.y;
-		#else
-			float3 PlaneNormal = GBuffer.WorldNormal;
-			GBuffer.Metallic = 128.0/255.0;
-			GBuffer.Specular = 128.0/255.0;
-		#endif
+#if NUM_MATERIAL_OUTPUTS_GETTANGENTOUTPUT > 0
+	// Blend in the negative intersection normal to create some concavity
+	// Not great as it ties the concavity to the convexity of the cornea surface
+	// No good justification for that. On the other hand, if we're just looking to
+	// introduce some concavity, this does the job.
+		float3 PlaneNormal = normalize(GetTangentOutput0(MaterialParameters));
+		float3 CausticNormal = normalize(lerp(PlaneNormal, -GBuffer.WorldNormal, IrisMask * IrisDistance));
+		float2 CausticNormalOct = UnitVectorToOctahedron(CausticNormal);
+		float2 CausticNormalDelta = (CausticNormalOct - WorldNormalOct) * 0.5 + (128.0 / 255.0);
+		GBuffer.Metallic = CausticNormalDelta.x;
+		GBuffer.Specular = CausticNormalDelta.y;
+#else
+		float3 PlaneNormal = GBuffer.WorldNormal;
+		GBuffer.Metallic = 128.0 / 255.0;
+		GBuffer.Specular = 128.0 / 255.0;
+#endif
 
 		// IrisNormal CustomData.yz
-		#if NUM_MATERIAL_OUTPUTS_CLEARCOATBOTTOMNORMAL > 0
-			float3 IrisNormal = normalize( ClearCoatBottomNormal0(MaterialParameters) );
-			#if MATERIAL_TANGENTSPACENORMAL
-				IrisNormal = normalize( TransformTangentVectorToWorld( MaterialParameters.TangentToWorld, IrisNormal ) );
-			#endif
-		#else
-			float3 IrisNormal = PlaneNormal;
-		#endif
+#if NUM_MATERIAL_OUTPUTS_CLEARCOATBOTTOMNORMAL > 0
+		float3 IrisNormal = normalize(ClearCoatBottomNormal0(MaterialParameters));
+#if MATERIAL_TANGENTSPACENORMAL
+		IrisNormal = normalize(TransformTangentVectorToWorld(MaterialParameters.TangentToWorld, IrisNormal));
+#endif
+#else
+		float3 IrisNormal = PlaneNormal;
+#endif
 
-		float2 IrisNormalOct  = UnitVectorToOctahedron( IrisNormal );
-		float2 IrisNormalDelta = ( IrisNormalOct - WorldNormalOct ) * 0.5 + (128.0/255.0);
+		float2 IrisNormalOct = UnitVectorToOctahedron(IrisNormal);
+		float2 IrisNormalDelta = (IrisNormalOct - WorldNormalOct) * 0.5 + (128.0 / 255.0);
 		GBuffer.CustomData.yz = IrisNormalDelta;
-	#else
+#else
 		GBuffer.Metallic = IrisDistance;
 
-		#if NUM_MATERIAL_OUTPUTS_GETTANGENTOUTPUT > 0
-			float3 Tangent = GetTangentOutput0(MaterialParameters);
-			GBuffer.CustomData.yz = UnitVectorToOctahedron( normalize(Tangent) ) * 0.5 + 0.5;
-		#endif
-	#endif
+#if NUM_MATERIAL_OUTPUTS_GETTANGENTOUTPUT > 0
+		float3 Tangent = GetTangentOutput0(MaterialParameters);
+		GBuffer.CustomData.yz = UnitVectorToOctahedron(normalize(Tangent)) * 0.5 + 0.5;
+#endif
+#endif
 
-	#if SHADING_PATH_MOBILE
-		#if MATERIAL_SHADINGMODEL_EYE_USE_CURVATURE
-			GBuffer.Curvature = Metallic;
-		#else
-			GBuffer.Curvature = CalculateCurvature(GBuffer.WorldNormal, MaterialParameters.WorldPosition_CamRelative);
-		#endif
+#if SHADING_PATH_MOBILE
+#if MATERIAL_SHADINGMODEL_EYE_USE_CURVATURE
+		GBuffer.Curvature = Metallic;
+#else
+		GBuffer.Curvature = CalculateCurvature(GBuffer.WorldNormal, MaterialParameters.WorldPosition_CamRelative);
+#endif
 
 		GBuffer.Curvature = clamp(GBuffer.Curvature, 0.001f, 1.0f);
-	#endif
+#endif
 	}
 #endif
-}
 
-//My-Add-SketchPipeline
+	//My-Add-SketchPipeline
 #if MATERIAL_SHADINGMODEL_SKETCH
 	else if (ShadingModel == SHADINGMODELID_SKETCH)
 	{
@@ -235,4 +234,6 @@ void SetGBufferForShadingModel(
 
 	GBuffer.SketchData.xy = frac((uv) / (100.0 / UVScale));
 #endif			
-	//End-14/06/24
+//End-14/06/24
+
+}
