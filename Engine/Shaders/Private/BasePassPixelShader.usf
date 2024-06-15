@@ -776,6 +776,10 @@ void FPixelShaderInOut_MainPS(
 	
 	// PreShadowFactor
 	float4 OutGBufferE = 0;
+
+//My-Add-SketchPipeline
+	float4 OutGBufferG = 0;
+//End-14/06/24
 	
 	FMaterialPixelParameters MaterialParameters = GetMaterialPixelParameters(Interpolants, In.SvPosition);
 	FPixelMaterialInputs PixelMaterialInputs;
@@ -1966,7 +1970,14 @@ void FPixelShaderInOut_MainPS(
 			float4 OutGBufferB = 0;
 			float4 OutGBufferC = 0;
 
+//My-Change-SketchPipeline
+			float4 OutGBufferG = 0;
+			
+			/*primitive
 			EncodeGBuffer(GBuffer, OutGBufferA, OutGBufferB, OutGBufferC, OutGBufferD, OutGBufferE, OutVelocity, QuantizationBias);
+			*/
+			EncodeGBuffer(GBuffer, OutGBufferA, OutGBufferB, OutGBufferC, OutGBufferD, OutGBufferE, OutGBufferG, OutVelocity, QuantizationBias);
+//End-14/06/24
 
 			Out.MRT[1] = OutGBufferA;
 			Out.MRT[2] = OutGBufferB;
@@ -1981,6 +1992,10 @@ void FPixelShaderInOut_MainPS(
 			#if GBUFFER_HAS_PRECSHADOWFACTOR
 				Out.MRT[GBUFFER_HAS_VELOCITY ? 6 : 5] = OutGBufferE;
 			#endif
+
+//My-Add-SketchPipeline
+			Out.MRT[6] = OutGBufferG;
+//End-14/06/24
 		}
 		#endif
 
