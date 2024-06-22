@@ -2934,6 +2934,22 @@ static void LoadEngineTexture(TObjectPtr<TextureType>& InOutTexture, const TCHAR
 	}
 }
 
+//My-Add-SketchPipeline
+static void LoadHatchLevelTextures(TArray<TObjectPtr<UTexture2D>>& HatchLevelTextures, int16 Num)
+{
+	HatchLevelTextures.Empty();
+	for (int16 i = 0; i < Num; i++)
+	{
+		FString name = "hatch_" + FString::FromInt(i);
+		FString path = "/Engine/SketchResources/Textures/" + name + "." + name;
+
+		TObjectPtr<UTexture2D> tex2d = nullptr;
+		LoadEngineTexture(tex2d, *path);
+		HatchLevelTextures.Add(tex2d);
+	}
+}
+//End-22/06/24
+
 static void LoadCustomTimeStep(UEngine* Engine)
 {
 	if (Engine->CustomTimeStepClassName.IsValid())
@@ -3138,6 +3154,10 @@ void UEngine::InitializeObjectReferences()
 	LoadEngineTexture(WeightMapPlaceholderTexture, *WeightMapPlaceholderTextureName.ToString());
 	LoadEngineTexture(LightMapDensityTexture, *LightMapDensityTextureName.ToString());
 	ConditionallyLoadPreIntegratedSkinBRDFTexture();
+
+//My-Add-SketchPipeline
+	LoadHatchLevelTextures(HatchLevelTextures, 6);
+//End-22/06/24
 
 #if WITH_EDITOR
 	// Avoid breaking some engine textures that might be cached very early (i.e. BlueNoise)
