@@ -1412,6 +1412,11 @@ public:
 	UPROPERTY(globalconfig)
 	FSoftObjectPath LightMapDensityTextureName;
 
+//My-Add-SketchPipeline
+	UPROPERTY()
+	TArray<TObjectPtr<UTexture2D>> HatchLevelTextures;
+//End-22/06/24
+
 	// Variables.
 
 	/** Engine loop, used for callbacks from the engine module into launch. */
