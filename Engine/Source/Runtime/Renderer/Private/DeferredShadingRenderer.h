@@ -819,7 +819,14 @@ private:
 	/** Renders the scene's lighting. */
 	void RenderLights(
 		FRDGBuilder& GraphBuilder,
+
+//My-Change-SketchPipeline
+		/*primitive
 		FMinimalSceneTextures& SceneTextures,
+		*/
+		FSceneTextures& SceneTextures,
+//End-24/06/24
+		
 		const FTranslucencyLightingVolumeTextures& TranslucencyLightingVolumeTextures,
 		FRDGTextureRef LightingChannelsTexture,
 		FSortedLightSetSceneInfo& SortedLightSet);
