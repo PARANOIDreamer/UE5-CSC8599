@@ -1996,9 +1996,8 @@ void FDeferredShadingSceneRenderer::RenderLights(
 						SCOPED_GPU_MASK(GraphBuilder.RHICmdList, View.GPUMask);
 
 //My-Change-SketchPipeline
-						/*primitive
-						RenderLight(GraphBuilder, Scene, View, SceneTextures, &LightSceneInfo, VirtualShadowMapId != INDEX_NONE ? nullptr : ScreenShadowMaskTexture, LightingChannelsTexture, false /*bRenderOverlap*/, true /*bCloudShadow*/, VirtualShadowMapArray.GetUniformBuffer(), ShadowSceneRenderer->VirtualShadowMapMaskBits, VirtualShadowMapId);
-						*/
+						//primitive
+						//RenderLight(GraphBuilder, Scene, View, SceneTextures, &LightSceneInfo, VirtualShadowMapId != INDEX_NONE ? nullptr : ScreenShadowMaskTexture, LightingChannelsTexture, false /*bRenderOverlap*/, true /*bCloudShadow*/, VirtualShadowMapArray.GetUniformBuffer(), ShadowSceneRenderer->VirtualShadowMapMaskBits, VirtualShadowMapId);
 						RenderLight(GraphBuilder, Scene, View, SceneTextures, &LightSceneInfo, VirtualShadowMapId != INDEX_NONE ? nullptr : ScreenNoShadowMask, LightingChannelsTexture, false /*bRenderOverlap*/, true /*bCloudShadow*/, VirtualShadowMapArray.GetUniformBuffer(), ShadowSceneRenderer->VirtualShadowMapMaskBits, VirtualShadowMapId);
 //End-24/06/24	
 					}
