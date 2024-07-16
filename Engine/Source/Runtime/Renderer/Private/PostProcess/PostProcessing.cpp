@@ -71,6 +71,10 @@
 #include "IESTextureManager.h"
 #include "UnrealEngine.h"
 
+//My-Add-SketchPipeline
+#include "SketchRendering.h"
+//End-25/06/24
+
 bool IsMobileEyeAdaptationEnabled(const FViewInfo& View);
 
 bool IsValidBloomSetupVariation(bool bUseBloom, bool bUseSun, bool bUseDof, bool bUseEyeAdaptation);
@@ -305,6 +309,12 @@ void AddPostProcessingPasses(
 	const FScreenPassTexture CustomDepth(Inputs.CustomDepthTexture, PrimaryViewRect);
 	const FScreenPassTexture Velocity(SceneTextureParameters.GBufferVelocityTexture, PrimaryViewRect);
 	const FScreenPassTexture BlackDummy(GSystemTextures.GetBlackDummy(GraphBuilder));
+
+//My-Add-SketchPipeline
+	const FScreenPassTexture SketchData(SceneTextureParameters.GBufferGTexture, PrimaryViewRect);
+	const FScreenPassTexture BaseColor(SceneTextureParameters.GBufferCTexture, PrimaryViewRect);
+	const FScreenPassTexture WorldNormal(SceneTextureParameters.GBufferATexture, PrimaryViewRect);
+//End-25/06/24
 	
 	const FTranslucencyPassResources& PostDOFTranslucencyResources = Inputs.TranslucencyViewResourcesMap.Get(ETranslucencyPass::TPT_TranslucencyAfterDOF);
 	const FTranslucencyPassResources& PostMotionBlurTranslucencyResources = Inputs.TranslucencyViewResourcesMap.Get(ETranslucencyPass::TPT_TranslucencyAfterMotionBlur);
@@ -354,6 +364,11 @@ void AddPostProcessingPasses(
 	{
 		MotionBlur,
 		Tonemap,
+
+//My-Add-SketchPipeline
+		SketchOutline,
+//End-25/06/24
+
 		FXAA,
 		PostProcessMaterialAfterTonemapping,
 		VisualizeLumenScene,
@@ -406,6 +421,11 @@ void AddPostProcessingPasses(
 	{
 		TEXT("MotionBlur"),
 		TEXT("Tonemap"),
+
+//My-Add-SketchPipeline
+		TEXT("SketchOutline"),
+//End-25/06/24
+
 		TEXT("FXAA"),
 		TEXT("PostProcessMaterial (AfterTonemapping)"),
 		TEXT("VisualizeLumenScene"),
@@ -484,6 +504,10 @@ void AddPostProcessingPasses(
 #endif
 	PassSequence.SetEnabled(EPass::PrimaryUpscale, PaniniConfig.IsEnabled() || (View.PrimaryScreenPercentageMethod == EPrimaryScreenPercentageMethod::SpatialUpscale && PrimaryViewRect.Size() != View.GetSecondaryViewRectSize()));
 	PassSequence.SetEnabled(EPass::SecondaryUpscale, View.RequiresSecondaryUpscale() || View.Family->GetSecondarySpatialUpscalerInterface() != nullptr);
+
+//My-Add-SketchPipeline
+	PassSequence.SetEnabled(EPass::SketchOutline, true);
+//End-25/06/24
 
 	const auto GetPostProcessMaterialInputs = [&](FScreenPassTexture InSceneColor)
 	{ 
@@ -1181,6 +1205,20 @@ void AddPostProcessingPasses(
 		SceneColor = AddAfterPass(EPass::Tonemap, SceneColor);
 
 		SceneColorAfterTonemap = SceneColor;
+
+//My-Add-SketchPipeline
+		if (PassSequence.IsEnabled(EPass::SketchOutline))
+		{
+			FSketchOutlineInputs PassInputs;
+			PassSequence.AcceptOverrideIfLastPass(EPass::SketchOutline, PassInputs.OverrideOutput);
+			PassInputs.SceneColor = SceneColor;
+			PassInputs.SketchData = SketchData;
+			PassInputs.WorldNormal = WorldNormal;
+			PassInputs.OutlineColor = FVector4f(1, 1, 1, 1);
+
+			SceneColor = AddSketchOutlinePass(GraphBuilder, View, PassInputs);
+		}
+//End-25/06/24
 
 		if (PassSequence.IsEnabled(EPass::FXAA))
 		{
