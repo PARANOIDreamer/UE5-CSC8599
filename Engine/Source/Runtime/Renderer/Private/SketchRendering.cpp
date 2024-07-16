@@ -66,3 +66,81 @@ void AddSketchShadowPass(
 	);
 }
 //End-24/06/24
+
+//My-Add-SketchPipeline
+class FSketchOutlinePassPS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FSketchOutlinePassPS);
+	SHADER_USE_PARAMETER_STRUCT(FSketchOutlinePassPS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputSceneColorTexture)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputWorldNormalTexture)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputSketchDataTexture)
+		SHADER_PARAMETER(FVector4f, SketchOutlineColor)
+		SHADER_PARAMETER(FVector2f, Resolution)
+		RENDER_TARGET_BINDING_SLOTS()
+		END_SHADER_PARAMETER_STRUCT()
+
+		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+};
+
+IMPLEMENT_GLOBAL_SHADER(FSketchOutlinePassPS, "/Engine/Private/SketchOutlineShader.usf", "MainPS", SF_Pixel);
+
+FScreenPassTexture AddSketchOutlinePass(
+	FRDGBuilder& GraphBuilder,
+	const FViewInfo& View,
+	const FSketchOutlineInputs Inputs)
+{
+	check(Inputs.SceneColor.IsValid());
+
+	RDG_EVENT_SCOPE(GraphBuilder, "SketchOutlinePass");
+
+	FScreenPassRenderTarget Output = Inputs.OverrideOutput;
+	if (!Output.IsValid())
+	{
+		FRDGTextureDesc OutputTextureDesc = Inputs.SceneColor.Texture->Desc;
+		OutputTextureDesc.Flags |= TexCreate_DisableDCC; // DCC will cause errors on this resource when running splitscreen so disable
+		OutputTextureDesc.Reset();
+		OutputTextureDesc.ClearValue = FClearValueBinding(FLinearColor::Transparent);
+
+		Output = FScreenPassRenderTarget(
+			GraphBuilder.CreateTexture(OutputTextureDesc, TEXT("Sketch")),
+			Inputs.SceneColor.ViewRect,
+			ERenderTargetLoadAction::EClear);
+
+		Output.Texture = GraphBuilder.CreateTexture(OutputTextureDesc, TEXT("SketchTexture"));
+		Output.LoadAction = ERenderTargetLoadAction::EClear;
+	}
+
+	const FScreenPassTextureViewport Viewport(Inputs.SketchData);
+	const FSceneViewFamily& ViewFamily = *(View.Family);
+
+	FRHISamplerState* PointClampSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI(); // *3
+
+	FSketchOutlinePassPS::FParameters* PassParameters = GraphBuilder.AllocParameters<FSketchOutlinePassPS::FParameters>();
+	PassParameters->Resolution = FVector2f(FScreenPassTextureViewport(Inputs.SceneColor.Texture).Rect.Width(), FScreenPassTextureViewport(Inputs.SceneColor.Texture).Rect.Height());
+	PassParameters->SketchOutlineColor = Inputs.OutlineColor;
+	PassParameters->InputSceneColorTexture = Inputs.SceneColor.Texture;
+	PassParameters->InputWorldNormalTexture = Inputs.WorldNormal.Texture;
+	PassParameters->InputSketchDataTexture = Inputs.SketchData.Texture;
+	PassParameters->RenderTargets[0] = Output.GetRenderTargetBinding();
+
+
+	TShaderMapRef<FSketchOutlinePassPS> PixelShader(View.ShaderMap);
+
+	FPixelShaderUtils::AddFullscreenPass(
+		GraphBuilder,
+		View.ShaderMap,
+		RDG_EVENT_NAME("SketchOutlinePassPS"),
+		PixelShader,
+		PassParameters,
+		Viewport.Rect);
+
+	return MoveTemp(Output);
+}
+//End-25/06/24
