@@ -60,6 +60,43 @@ static TAutoConsoleVariable<float> CVarScreenPercentageMaxResolution(
 	TEXT("in average on console with your project specific dynamic resolution settings."),
 	ECVF_Default);
 
+//My-Add-Dynamic
+static TAutoConsoleVariable<int> CVarDynamicResolutionQuality(
+	TEXT("r.DynamicResolution.Quality"),
+	0,
+	TEXT("Enable dynamic resolution which will override r.ScreenPercentage and modify it automatically at runtime to fit into some frame time budget.\n")
+	TEXT("For better result this should be used in combination with 'r.SceneRenderTargetResizeMethod 2'."),
+	ECVF_Scalability | ECVF_Default);
+
+static TAutoConsoleVariable<float> CVarDynamicResolutionMaxScreenPercentage(
+	TEXT("r.DynamicResolution.MaxScreenPercentage"),
+	100.0f,
+	TEXT("Maximum screen percentage we allow the renderer to use when the scene is light."),
+	ECVF_Scalability | ECVF_Default);
+
+static TAutoConsoleVariable<float> CVarDynamicResolutionMinScreenPercentage(
+	TEXT("r.DynamicResolution.MinScreenPercentage"),
+	70.0f,
+	TEXT("Minimum screen percentage we allow the renderer to fall down to when the scene gets very heavy."),
+	ECVF_Scalability | ECVF_Default);
+
+static TAutoConsoleVariable<float> CVarDynamicResolutionMaxTimeBudget(
+	TEXT("r.DynamicResolution.MaxTimeBudget"),
+	15.0f,
+	TEXT("When rendering time exceeds MaxTimeBudget, we switch to a lower resolution to reduce burden on the GPU.\n")
+	TEXT("Defined in ms. It's better to be conservative: for a 60FPS budget, 14 or 15 values are better than 16 to avoid frame drops."),
+	ECVF_Scalability | ECVF_Default);
+
+static TAutoConsoleVariable<float> CVarDynamicResolutionMinTimeBudget(
+	TEXT("r.DynamicResolution.MinTimeBudget"),
+	10.0f,
+	TEXT("When rendering time is lower than MinTimeBudget, we're very fast and we switch to higher resolution, increasing quality and GPU load.\n")
+	TEXT("Defined in ms. The value should be much lower than MaxTimeBudget to avoid some bouncing back and forth between HD and LD.\n")
+	TEXT("It's better to be conservative and have a value low enough you can be sure the increase in resolution won't violate the frame time budget, ")
+	TEXT("the ideal value can vary a lot depending on the difference between MaxScreenPercentage and MinScreenPercentage."),
+	ECVF_Scalability | ECVF_Default);
+//End-5/8/24
+
 #if !UE_BUILD_SHIPPING
 
 void OnScreenPercentageChange(IConsoleVariable* Var)
@@ -215,6 +252,44 @@ void FStaticResolutionFractionHeuristic::FUserSettings::PullRunTimeRenderingSett
 	float GlobalResolutionFractionOverride = GetResolutionFraction(CVarScreenPercentage.GetValueOnGameThread());
 	MinRenderingResolution = CVarScreenPercentageMinResolution.GetValueOnGameThread();
 	MaxRenderingResolution = CVarScreenPercentageMaxResolution.GetValueOnGameThread();
+
+//My-Add-Dynamic
+	static float ScreenPercentageCVar = CVarScreenPercentage.GetValueOnGameThread();
+	if (CVarDynamicResolutionQuality.GetValueOnGameThread() > 0)
+	{
+		float Value = GetResolutionFraction(ScreenPercentageCVar);
+
+		static int NoTouchFrames = 0;
+		static int HighRes = 1;
+
+		if (NoTouchFrames > 0)
+		{
+			NoTouchFrames--;
+		}
+		else
+		{
+			float frameTime = FPlatformTime::ToMilliseconds(GGPUFrameTime);
+
+			if (HighRes && (frameTime > CVarDynamicResolutionMaxTimeBudget.GetValueOnGameThread()) && (frameTime < 60.0f))
+			{
+				HighRes = 0;
+				NoTouchFrames = 50;
+			}
+			else if (!HighRes && (frameTime > 0.0f) && (frameTime < CVarDynamicResolutionMinTimeBudget.GetValueOnGameThread()))
+			{
+				HighRes = 1;
+				NoTouchFrames = 5;
+			}
+		}
+		Value *= ((HighRes ? CVarDynamicResolutionMaxScreenPercentage : CVarDynamicResolutionMinScreenPercentage).GetValueOnGameThread() / 100.0f);
+
+		if (Value >= 0.0)
+		{
+			GlobalResolutionFractionOverride = Value;
+			ScreenPercentageCVar *= Value;
+		}
+	}
+//End-5/8/24
 
 	if (GlobalResolutionFractionOverride > 0.0)
 	{
