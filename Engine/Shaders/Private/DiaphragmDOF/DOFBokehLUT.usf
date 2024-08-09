@@ -184,109 +184,111 @@ void BuildBokehLUTMainCS(uint2 DispatchThreadId : SV_DispatchThreadID)
 	}
 	#endif
 
+#if DIM_LUT_FORMAT == LUT_FORMAT_DISTANCE_FACTOR
+	{
+		float PixelAngle = atan2(RelativePosFromCenter.y, RelativePosFromCenter.x) + DiaphragmRotation + PI;
+
+		float CocRadiusToBokehEdgeFactor = ComputeCocRadiusToBokehEdgeFactor(PixelAngle);
+
+		BokehLUTOutput[DispatchThreadId] = float4(CocRadiusToBokehEdgeFactor, 0, 0, 0);
+	}
+#elif DIM_LUT_FORMAT == LUT_FORMAT_FULL_RES_TO_COC_DISTANCE
+	{
+		float PixelAngle = atan2(RelativePosFromCenter.y, RelativePosFromCenter.x) + DiaphragmRotation + PI;
+
+		float CocRadiusToBokehEdgeFactor = ComputeCocRadiusToBokehEdgeFactor(PixelAngle);
+		if (all(RelativePosFromCenter == 0.0))
+		{
+			CocRadiusToBokehEdgeFactor = 1.0;
+		}
+
+		float PixelCocDistanceFromBokehCenter = FullResPixelDistanceToCocDistance(length(RelativePosFromCenter * float2(CocSqueeze, 1.0)) / CocRadiusToBokehEdgeFactor);
+		BokehLUTOutput[DispatchThreadId] = float4(PixelCocDistanceFromBokehCenter, 0, 0, 0);
+	}
+#elif DIM_LUT_FORMAT == LUT_FORMAT_GATHER_SAMPLE_POS
+	{
 //My-Change-DoF
 //privitive
-	//#if DIM_LUT_FORMAT == LUT_FORMAT_DISTANCE_FACTOR
-	//{
-	//	float PixelAngle = atan2(RelativePosFromCenter.y, RelativePosFromCenter.x) + DiaphragmRotation + PI;
+		//float InvBladeCount = rcp(float(BladeCount));
 
-	//	float CocRadiusToBokehEdgeFactor = ComputeCocRadiusToBokehEdgeFactor(PixelAngle);
+		//float RingRadius;
+		//float RingSampleId;
+		//RingCoordinateFromCartesianCoordinate(RelativePosFromCenter, RingRadius, RingSampleId);
 
-	//	BokehLUTOutput[DispatchThreadId] = float4(CocRadiusToBokehEdgeFactor, 0, 0, 0);
-	//}
-	//#elif DIM_LUT_FORMAT == LUT_FORMAT_FULL_RES_TO_COC_DISTANCE
-	//{
-	//	float PixelAngle = atan2(RelativePosFromCenter.y, RelativePosFromCenter.x) + DiaphragmRotation + PI;
+		//// Number of sample on the ring.
+		//float RingSampleCount = max(1, RingRadius * (4 * 2));
 
-	//	float CocRadiusToBokehEdgeFactor = ComputeCocRadiusToBokehEdgeFactor(PixelAngle);
-	//	if (all(RelativePosFromCenter == 0.0))
-	//	{
-	//		CocRadiusToBokehEdgeFactor = 1.0;
-	//	}
-
-	//	float PixelCocDistanceFromBokehCenter = FullResPixelDistanceToCocDistance(length(RelativePosFromCenter * float2(CocSqueeze, 1.0)) / CocRadiusToBokehEdgeFactor);
-	//	BokehLUTOutput[DispatchThreadId] = float4(PixelCocDistanceFromBokehCenter, 0, 0, 0);
-	//}
-	//#elif DIM_LUT_FORMAT == LUT_FORMAT_GATHER_SAMPLE_POS
-	//{
-	//	float InvBladeCount = rcp(float(BladeCount));
-
-	//	float RingRadius;
-	//	float RingSampleId;
-	//	RingCoordinateFromCartesianCoordinate(RelativePosFromCenter, RingRadius, RingSampleId);
-
-	//	// Number of sample on the ring.
-	//	float RingSampleCount = max(1, RingRadius * (4 * 2));
-
-	//	// TODO: as the bokeh rotate, interferances are introduced in gather pass that post filtering just can't keep up with.
-	//	// Need to find a proper fix.
-	//	float PixelAngle = ((RingSampleId + frac(RingRadius * 0.5)) / RingSampleCount) * (2 * PI) + PI;
+		//// TODO: as the bokeh rotate, interferances are introduced in gather pass that post filtering just can't keep up with.
+		//// Need to find a proper fix.
+		//float PixelAngle = ((RingSampleId + frac(RingRadius * 0.5)) / RingSampleCount) * (2 * PI) + PI;
 		
-	//	float EdgeId = floor(PixelAngle * rcp(2 * PI) * float(BladeCount));
-	//	float EdgeInterp = frac(PixelAngle * rcp(2 * PI) * float(BladeCount));
+		//float EdgeId = floor(PixelAngle * rcp(2 * PI) * float(BladeCount));
+		//float EdgeInterp = frac(PixelAngle * rcp(2 * PI) * float(BladeCount));
 
-	//	// Compute the position of the sample on blade edge (assuming kernel area = PI).
-	//	float2 KernelUnitPos;
-	//	if (BOKEH_SHAPE == BOKEH_SHAPE_CIRCLE)
-	//	{
-	//		// Pointless, but here just for testing purpose.
-	//		KernelUnitPos = float2(cos(PixelAngle), sin(PixelAngle));
-	//	}
-	//	else if (BOKEH_SHAPE == BOKEH_SHAPE_STRAIGHT_BLADES)
-	//	{
-	//		float A0 = (EdgeId + 0.0) * ((2 * PI) * InvBladeCount) - DiaphragmRotation;
-	//		float A1 = A0 + ((2 * PI) * InvBladeCount);
+		//// Compute the position of the sample on blade edge (assuming kernel area = PI).
+		//float2 KernelUnitPos;
+		//if (BOKEH_SHAPE == BOKEH_SHAPE_CIRCLE)
+		//{
+		//	// Pointless, but here just for testing purpose.
+		//	KernelUnitPos = float2(cos(PixelAngle), sin(PixelAngle));
+		//}
+		//else if (BOKEH_SHAPE == BOKEH_SHAPE_STRAIGHT_BLADES)
+		//{
+		//	float A0 = (EdgeId + 0.0) * ((2 * PI) * InvBladeCount) - DiaphragmRotation;
+		//	float A1 = A0 + ((2 * PI) * InvBladeCount);
 
-	//		float2 P0 = float2(cos(A0), sin(A0));
-	//		float2 P1 = float2(cos(A1), sin(A1));
-	//		KernelUnitPos = CocRadiusToCircumscribedRadius * lerp(P0, P1, EdgeInterp); // TODO.
-	//	}
-	//	else if (BOKEH_SHAPE == BOKEH_SHAPE_ROUNDED_BLADES)
-	//	{
-	//		// Compute the position of the sample on blade edge (assuming kernel area = PI).
-	//		float BetaAngle = asin(CocRadiusToCircumscribedRadius / DiaphragmBladeRadius * sin(PI / float(BladeCount)));
-	//		float SampleBladeAngle = BetaAngle * (EdgeInterp * 2 - 1);
+		//	float2 P0 = float2(cos(A0), sin(A0));
+		//	float2 P1 = float2(cos(A1), sin(A1));
+		//	KernelUnitPos = CocRadiusToCircumscribedRadius * lerp(P0, P1, EdgeInterp); // TODO.
+		//}
+		//else if (BOKEH_SHAPE == BOKEH_SHAPE_ROUNDED_BLADES)
+		//{
+		//	// Compute the position of the sample on blade edge (assuming kernel area = PI).
+		//	float BetaAngle = asin(CocRadiusToCircumscribedRadius / DiaphragmBladeRadius * sin(PI / float(BladeCount)));
+		//	float SampleBladeAngle = BetaAngle * (EdgeInterp * 2 - 1);
 
-	//		float2 BladeUnitPos;
-	//		BladeUnitPos.x = DiaphragmBladeRadius * cos(SampleBladeAngle) - DiaphragmBladeCenterOffset;
-	//		BladeUnitPos.y = DiaphragmBladeRadius * sin(SampleBladeAngle);
+		//	float2 BladeUnitPos;
+		//	BladeUnitPos.x = DiaphragmBladeRadius * cos(SampleBladeAngle) - DiaphragmBladeCenterOffset;
+		//	BladeUnitPos.y = DiaphragmBladeRadius * sin(SampleBladeAngle);
 				
-	//		// Transform from blade space -> kernel space.
-	//		float BladeAngle = (EdgeId + 0.5) * (2 * PI) * InvBladeCount - DiaphragmRotation;
-	//		KernelUnitPos = float2(
-	//				BladeUnitPos.x * cos(BladeAngle) - BladeUnitPos.y * sin(BladeAngle),
-	//				BladeUnitPos.x * sin(BladeAngle) + BladeUnitPos.y * cos(BladeAngle));
-	//	}
+		//	// Transform from blade space -> kernel space.
+		//	float BladeAngle = (EdgeId + 0.5) * (2 * PI) * InvBladeCount - DiaphragmRotation;
+		//	KernelUnitPos = float2(
+		//			BladeUnitPos.x * cos(BladeAngle) - BladeUnitPos.y * sin(BladeAngle),
+		//			BladeUnitPos.x * sin(BladeAngle) + BladeUnitPos.y * cos(BladeAngle));
+		//}
 
-	//	// Final position of the sample in kernel.
-	//	float2 SamplePos = KernelUnitPos * RingRadius;
+		//// Final position of the sample in kernel.
+		//float2 SamplePos = KernelUnitPos * RingRadius;
 		
-	//	// Apply anamorphic squeeze factor to save VALU in DOFGatherKernel.ush
-	//	SamplePos.x *= CocInvSqueeze;
+		//// Apply anamorphic squeeze factor to save VALU in DOFGatherKernel.ush
+		//SamplePos.x *= CocInvSqueeze;
 
-	//	BokehLUTOutput[DispatchThreadId] = float4(SamplePos, 0, 0);
-	//}
-	//#else
-	//	#error Unknown LUT format.
-	//#endif
+		//BokehLUTOutput[DispatchThreadId] = float4(SamplePos, 0, 0);
 	
-	float RingRadius;
-	float RingSampleId;
-	RingCoordinateFromCartesianCoordinate(RelativePosFromCenter, RingRadius, RingSampleId);
+	
+		float RingRadius;
+		float RingSampleId;
+		RingCoordinateFromCartesianCoordinate(RelativePosFromCenter, RingRadius, RingSampleId);
 
-	// Number of sample on the ring.
-	float RingSampleCount = max(1, RingRadius * (4 * 2));
-	float PixelAngle = ((RingSampleId + frac(RingRadius * 0.5)) / RingSampleCount) * (2 * PI) + PI;
-	RingRadius *= (cos(PI / BladeCount) / (cos(PixelAngle - (2.0f * PI / BladeCount) * floor((BladeCount * PixelAngle + PI) / 2.0f / PI))));
-	PixelAngle += DiaphragmRotation;
+		// Number of sample on the ring.
+		float RingSampleCount = max(1, RingRadius * (4 * 2));
+		float PixelAngle = ((RingSampleId + frac(RingRadius * 0.5)) / RingSampleCount) * (2 * PI) + PI;
+		RingRadius *= (cos(PI / BladeCount) / (cos(PixelAngle - (2.0f * PI / BladeCount) * floor((BladeCount * PixelAngle + PI) / 2.0f / PI))));
+		PixelAngle += DiaphragmRotation;
 	
-	// Compute the position of the sample on blade edge (assuming kernel area = PI).
-	float2 KernelUnitPos;
-	KernelUnitPos = float2(cos(PixelAngle), sin(PixelAngle));
-	float2 SamplePos = KernelUnitPos * RingRadius;
+		// Compute the position of the sample on blade edge (assuming kernel area = PI).
+		float2 KernelUnitPos;
+		KernelUnitPos = float2(cos(PixelAngle), sin(PixelAngle));
+		float2 SamplePos = KernelUnitPos * RingRadius;
 		
-	// Apply anamorphic squeeze factor to save VALU in DOFGatherKernel.ush
-	SamplePos.x *= CocInvSqueeze;
-	BokehLUTOutput[DispatchThreadId] = float4(SamplePos, 0, 0);
+		// Apply anamorphic squeeze factor to save VALU in DOFGatherKernel.ush
+		SamplePos.x *= CocInvSqueeze;
+		BokehLUTOutput[DispatchThreadId] = float4(SamplePos, 0, 0);
 //End-24/07/24
+
+	}
+#else
+		#error Unknown LUT format.
+#endif
 }
