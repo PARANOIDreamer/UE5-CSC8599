@@ -254,10 +254,9 @@ void FStaticResolutionFractionHeuristic::FUserSettings::PullRunTimeRenderingSett
 	MaxRenderingResolution = CVarScreenPercentageMaxResolution.GetValueOnGameThread();
 
 //My-Add-Dynamic
-	static float ScreenPercentageCVar = CVarScreenPercentage.GetValueOnGameThread();
 	if (CVarDynamicResolutionQuality.GetValueOnGameThread() > 0)
 	{
-		float Value = GetResolutionFraction(ScreenPercentageCVar);
+		float Value = GlobalResolutionFractionOverride;
 
 		static int NoTouchFrames = 0;
 		static int HighRes = 1;
@@ -286,7 +285,6 @@ void FStaticResolutionFractionHeuristic::FUserSettings::PullRunTimeRenderingSett
 		if (Value >= 0.0)
 		{
 			GlobalResolutionFractionOverride = Value;
-			ScreenPercentageCVar *= Value;
 		}
 	}
 //End-5/8/24
